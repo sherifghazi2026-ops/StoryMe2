@@ -1,318 +1,178 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
-  StyleSheet,
   TextInput,
   TouchableOpacity,
-  SafeAreaView,
-  Alert,
-  Dimensions,
-  KeyboardAvoidingView,
-  Platform,
+  StyleSheet,
+  Alert
 } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-const { width } = Dimensions.get('window');
+export default function AuthCodeScreen({ navigation, route }) {
+  const { pack } = route.params || {};
+  const [authCode, setAuthCode] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
 
-const AuthCodeScreen = ({ navigation, route }) => {
-  const { story, childData, parentPhone, price, paymentMethod } = route.params;
-  const [code, setCode] = useState(['', '', '', '', '', '']);
-  const [timer, setTimer] = useState(300); // 5 دقائق
-  const [isLoading, setIsLoading] = useState(false);
-  const inputRefs = [];
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTimer(prev => prev > 0 ? prev - 1 : 0);
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
-    if (code.every(c => c !== '') && code.join('').length === 6) {
-      verifyCode();
-    }
-  }, [code]);
-
-  const handleCodeChange = (text, index) => {
-    if (text.length > 1) {
-      text = text.charAt(0);
+  const handleSubmit = () => {
+    if (!authCode.trim() || !phoneNumber.trim()) {
+      Alert.alert('خطأ', 'يرجى ملء جميع الحقول');
+      return;
     }
 
-    const newCode = [...code];
-    newCode[index] = text;
-    setCode(newCode);
-
-    if (text && index < 5) {
-      inputRefs[index + 1]?.focus();
-    }
-
-    if (!text && index > 0) {
-      inputRefs[index - 1]?.focus();
-    }
-  };
-
-  const verifyCode = async () => {
-    setIsLoading(true);
-    
-    // محاكاة اتصال بالسيرفر - الكود الصحيح هو 123456
-    const enteredCode = code.join('');
-    const validCode = '123456';
-    
-    setTimeout(async () => {
-      if (enteredCode === validCode) {
-        try {
-          // حفظ حالة القصة المفتوحة
-          const storiesState = await AsyncStorage.getItem('@stories_state');
-          const parsed = storiesState ? JSON.parse(storiesState) : {};
-          parsed[story.id] = true;
-          
-          await AsyncStorage.setItem('@stories_state', JSON.stringify(parsed));
-          
-          Alert.alert(
-            '🎉 تهانينا!',
-            `تم تفعيل قصة "${story.title}" بنجاح!\nيمكنك الآن قراءتها من مكتبة القصص.`,
-            [
-              { 
-                text: 'الذهاب للمكتبة',
-                onPress: () => navigation.navigate('StoryLibrary', { childData })
-              }
-            ]
-          );
-        } catch (error) {
-          Alert.alert('خطأ', 'حدث خطأ أثناء حفظ بيانات التفعيل');
-        }
-      } else {
-        Alert.alert(
-          'خطأ',
-          'كود التفعيل غير صحيح. يرجى المحاولة مرة أخرى.',
-          [
-            { 
-              text: 'إعادة الإرسال', 
-              onPress: resendCode 
-            },
-            { text: 'حسناً' }
-          ]
-        );
-      }
-      
-      setIsLoading(false);
-    }, 1500);
-  };
-
-  const resendCode = () => {
-    setCode(['', '', '', '', '', '']);
-    setTimer(300);
-    inputRefs[0]?.focus();
-    
+    // هنا يمكنك إضافة التحقق من صحة الكود مع السيرفر
     Alert.alert(
-      'تم إعادة الإرسال',
-      'تم إرسال كود جديد إلى هاتفك',
-      [{ text: 'حسناً' }]
+      'طلب التحقق',
+      `تم إرسال طلب التحقق للباقة "${pack?.title}"\nسنقوم بالتواصل معك على الرقم ${phoneNumber} للتأكيد.`,
+      [
+        {
+          text: 'حسناً',
+          onPress: () => {
+            navigation.goBack();
+          }
+        }
+      ]
     );
   };
 
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
+  if (!pack) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>لم يتم العثور على الباقة</Text>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.backButtonText}>العودة</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
-        <View style={styles.content}>
-          <View style={styles.header}>
-            <Text style={styles.title}>🔓 كود التفعيل</Text>
-            <Text style={styles.subtitle}>
-              أدخل الكود المكون من 6 أرقام الذي تم إرساله إلى
-            </Text>
-            <Text style={styles.phoneNumber}>{parentPhone}</Text>
-          </View>
-
-          <View style={styles.timerContainer}>
-            <Text style={styles.timerText}>
-              ⏰ الكود صالح لمدة: {formatTime(timer)}
-            </Text>
-          </View>
-
-          <View style={styles.codeContainer}>
-            {code.map((digit, index) => (
-              <TextInput
-                key={index}
-                ref={ref => inputRefs[index] = ref}
-                style={[
-                  styles.codeInput,
-                  digit && styles.codeInputFilled
-                ]}
-                value={digit}
-                onChangeText={text => handleCodeChange(text, index)}
-                keyboardType="numeric"
-                maxLength={1}
-                textAlign="center"
-                selectTextOnFocus
-                editable={!isLoading}
-              />
-            ))}
-          </View>
-
-          <TouchableOpacity
-            style={[
-              styles.verifyButton,
-              (code.some(c => c === '') || isLoading) && styles.verifyButtonDisabled
-            ]}
-            onPress={verifyCode}
-            disabled={code.some(c => c === '') || isLoading}
-          >
-            <Text style={styles.verifyButtonText}>
-              {isLoading ? 'جاري التحقق...' : 'تفعيل القصة'}
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.resendButton}
-            onPress={resendCode}
-            disabled={timer > 0}
-          >
-            <Text style={[
-              styles.resendText,
-              timer > 0 && styles.resendTextDisabled
-            ]}>
-              {timer > 0 ? `إعادة الإرسال بعد ${formatTime(timer)}` : 'إعادة إرسال الكود'}
-            </Text>
-          </TouchableOpacity>
-
-          <View style={styles.infoCard}>
-            <Text style={styles.infoTitle}>معلومات الشراء:</Text>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>القصة:</Text>
-              <Text style={styles.infoValue}>{story.title}</Text>
-            </View>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>المبلغ:</Text>
-              <Text style={styles.infoValue}>{price} جنيه مصري</Text>
-            </View>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>طريقة الدفع:</Text>
-              <Text style={styles.infoValue}>
-                {paymentMethod === 'vodafone' ? 'فودافون كاش' : 'انستا باي'}
-              </Text>
-            </View>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>رقم التحويل:</Text>
-              <Text style={styles.infoValue}>01033833119</Text>
-            </View>
-          </View>
-
-          <View style={styles.supportCard}>
-            <Text style={styles.supportTitle}>📞 للدعم الفني:</Text>
-            <Text style={styles.supportText}>رقم الهاتف: 01033833119</Text>
-            <Text style={styles.supportText}>ساعات العمل: 9 صباحاً - 10 مساءً</Text>
-          </View>
+      <View style={styles.header}>
+        <Text style={styles.appTitle}>🔑 كود التفعيل</Text>
+        
+        <TouchableOpacity
+          style={styles.smallBackButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.smallBackButtonText}>↩️ العودة</Text>
+        </TouchableOpacity>
+      </View>
+      
+      <View style={styles.content}>
+        <View style={styles.packInfo}>
+          <Text style={styles.packTitle}>{pack.title}</Text>
+          <Text style={styles.packPrice}>السعر: {pack.price} ج.م</Text>
+          <Text style={styles.packDescription}>{pack.description}</Text>
         </View>
-      </KeyboardAvoidingView>
+        
+        <View style={styles.form}>
+          <Text style={styles.inputLabel}>📱 رقم الهاتف:</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="أدخل رقم هاتفك للتواصل"
+            value={phoneNumber}
+            onChangeText={setPhoneNumber}
+            keyboardType="phone-pad"
+            textAlign="right"
+          />
+          
+          <Text style={styles.inputLabel}>🔢 كود التفعيل:</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="أدخل كود التفعيل المكون من 6 أرقام"
+            value={authCode}
+            onChangeText={setAuthCode}
+            keyboardType="numeric"
+            maxLength={6}
+            textAlign="right"
+          />
+          
+          <Text style={styles.instructions}>
+            للحصول على كود التفعيل:
+            {"\n"}1. قم بدفع {pack.price} ج.م عبر فودافون كاش أو انستا باي على الرقم 01033833119
+            {"\n"}2. سنقوم بالتواصل معك عبر واتساب لإرسال كود التفعيل
+            {"\n"}3. أدخل الكود هنا لتفعيل الباقة
+          </Text>
+          
+          <TouchableOpacity
+            style={[styles.submitButton, (!authCode || !phoneNumber) && styles.disabledButton]}
+            onPress={handleSubmit}
+            disabled={!authCode || !phoneNumber}
+          >
+            <Text style={styles.submitButtonText}>تفعيل الباقة</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={styles.whatsappButton}
+            onPress={() => {
+              // يمكن إضافة رابط واتساب
+              Alert.alert('تواصل معنا', 'للحصول على كود التفعيل، تواصل معنا على واتساب: 01033833119');
+            }}
+          >
+            <Text style={styles.whatsappButtonText}>💬 تواصل عبر واتساب</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
     </SafeAreaView>
   );
-};
+}
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: '#E8F4FD',
   },
-  keyboardView: {
-    flex: 1,
-  },
-  content: {
+  errorContainer: {
     flex: 1,
     justifyContent: 'center',
-    paddingHorizontal: 20,
-  },
-  header: {
     alignItems: 'center',
-    marginBottom: 30,
+    padding: 20,
   },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#4CAF50',
-    marginBottom: 10,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 5,
-  },
-  phoneNumber: {
+  errorText: {
     fontSize: 20,
-    fontWeight: 'bold',
-    color: '#333',
-  },
-  timerContainer: {
-    alignItems: 'center',
-    marginBottom: 40,
-  },
-  timerText: {
-    fontSize: 16,
-    color: '#FF9800',
-    fontWeight: '600',
-  },
-  codeContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginBottom: 40,
-    gap: 10,
-  },
-  codeInput: {
-    width: 50,
-    height: 60,
-    borderWidth: 2,
-    borderColor: '#BDBDBD',
-    borderRadius: 10,
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#333',
-    backgroundColor: '#fff',
-  },
-  codeInputFilled: {
-    borderColor: '#4CAF50',
-    backgroundColor: '#E8F5E9',
-  },
-  verifyButton: {
-    backgroundColor: '#4CAF50',
-    paddingVertical: 18,
-    borderRadius: 12,
-    alignItems: 'center',
+    color: '#FF6B6B',
     marginBottom: 20,
   },
-  verifyButtonDisabled: {
-    backgroundColor: '#A5D6A7',
-  },
-  verifyButtonText: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: 'bold',
-  },
-  resendButton: {
+  header: {
+    padding: 20,
+    backgroundColor: '#4A90E2',
+    borderBottomLeftRadius: 25,
+    borderBottomRightRadius: 25,
     alignItems: 'center',
-    marginBottom: 40,
+    marginBottom: 10,
+    position: 'relative',
   },
-  resendText: {
-    fontSize: 16,
-    color: '#2196F3',
+  appTitle: {
+    fontSize: 26,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    textAlign: 'center',
+    marginBottom: 15,
+  },
+  smallBackButton: {
+    position: 'absolute',
+    top: 15,
+    left: 15,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    padding: 8,
+    borderRadius: 10,
+  },
+  smallBackButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
     fontWeight: '600',
   },
-  resendTextDisabled: {
-    color: '#BDBDBD',
+  content: {
+    padding: 20,
   },
-  infoCard: {
-    backgroundColor: '#fff',
+  packInfo: {
+    backgroundColor: '#FFFFFF',
     borderRadius: 15,
     padding: 20,
     marginBottom: 20,
@@ -322,49 +182,98 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  infoTitle: {
-    fontSize: 18,
+  packTitle: {
+    fontSize: 22,
     fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 15,
-    textAlign: 'right',
-  },
-  infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    color: '#2C3E50',
+    textAlign: 'center',
     marginBottom: 10,
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F5F5F5',
   },
-  infoLabel: {
-    fontSize: 14,
-    color: '#666',
+  packPrice: {
+    fontSize: 18,
+    color: '#FF9800',
+    textAlign: 'center',
+    marginBottom: 10,
+    fontWeight: 'bold',
   },
-  infoValue: {
-    fontSize: 14,
-    color: '#333',
-    fontWeight: '500',
+  packDescription: {
+    fontSize: 16,
+    color: '#5D6D7E',
+    textAlign: 'center',
+    lineHeight: 24,
   },
-  supportCard: {
-    backgroundColor: '#E3F2FD',
+  form: {
+    backgroundColor: '#FFFFFF',
     borderRadius: 15,
     padding: 20,
-    marginBottom: 30,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
-  supportTitle: {
+  inputLabel: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#1565C0',
-    marginBottom: 10,
+    color: '#2C3E50',
+    marginBottom: 8,
     textAlign: 'right',
   },
-  supportText: {
-    fontSize: 14,
-    color: '#555',
-    marginBottom: 5,
+  input: {
+    backgroundColor: '#F8F9F9',
+    padding: 15,
+    borderRadius: 12,
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#D6DBDF',
     textAlign: 'right',
+    marginBottom: 20,
+  },
+  instructions: {
+    fontSize: 14,
+    color: '#5D6D7E',
+    lineHeight: 22,
+    marginBottom: 20,
+    textAlign: 'right',
+    backgroundColor: '#F8F9F9',
+    padding: 15,
+    borderRadius: 10,
+  },
+  submitButton: {
+    backgroundColor: '#4CAF50',
+    padding: 18,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  disabledButton: {
+    backgroundColor: '#AAB7B8',
+  },
+  submitButtonText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  whatsappButton: {
+    backgroundColor: '#25D366',
+    padding: 18,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  whatsappButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  backButton: {
+    backgroundColor: '#4A90E2',
+    padding: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  backButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 });
-
-export default AuthCodeScreen;

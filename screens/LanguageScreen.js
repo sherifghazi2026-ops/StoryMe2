@@ -1,196 +1,115 @@
 import React from 'react';
 import { 
-  StyleSheet, 
-  Text, 
   View, 
-  Image, 
-  TouchableOpacity,
-  SafeAreaView,
-  Dimensions 
+  Text, 
+  TouchableOpacity, 
+  StyleSheet, 
+  Image 
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-const { width, height } = Dimensions.get('window');
-
-const LanguageScreen = ({ navigation }) => {
+export default function LanguageScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
-        <Text style={styles.title}>StoryMe 📚</Text>
-        <Text style={styles.subtitle}>قصص تفاعلية تعليمية للأطفال</Text>
+      <View style={styles.languageContainer}>
+        <Text style={styles.languageTitle}>اختر اللغة / Choose Language</Text>
         
         <Image 
           source={{ uri: "https://raw.githubusercontent.com/sherifghazi2026-ops/StoryMeApp/refs/heads/main/square-1-1-1767863955346.png" }} 
-          style={styles.logo} 
+          style={styles.languageImage} 
           resizeMode="contain"
         />
         
-        <View style={styles.languageSection}>
-          <Text style={styles.sectionTitle}>اختر اللغة المفضلة</Text>
-          
+        <View style={styles.languageButtons}>
           <TouchableOpacity
-            style={styles.languageButton}
-            onPress={() => navigation.navigate('Form')}
+            style={[styles.languageButton, styles.arabicButton]}
+            onPress={() => navigation.navigate('Form', { language: 'ar' })}
           >
-            <View style={styles.languageContent}>
-              <Text style={styles.flag}>🇸🇦</Text>
-              <View style={styles.textContainer}>
-                <Text style={styles.languageName}>العربية</Text>
-                <Text style={styles.languageDesc}>قصص عربية مع التشكيل الكامل</Text>
-              </View>
-              <Text style={styles.arrow}>→</Text>
-            </View>
+            <Text style={styles.languageButtonText}>العربية 🇪🇬</Text>
+            <Text style={styles.languageButtonSubtext}>قصص الأطفال</Text>
           </TouchableOpacity>
           
           <TouchableOpacity
-            style={[styles.languageButton, styles.disabledButton]}
-            onPress={() => {}}
-            disabled={true}
+            style={[styles.languageButton, styles.englishButton]}
+            onPress={() => {
+              // يمكن إضافة نسخة إنجليزية لاحقاً
+              alert('النسخة الإنجليزية قريباً بإذن الله');
+            }}
           >
-            <View style={styles.languageContent}>
-              <Text style={styles.flag}>🇺🇸</Text>
-              <View style={styles.textContainer}>
-                <Text style={styles.languageName}>English</Text>
-                <Text style={[styles.languageDesc, styles.comingSoon]}>Coming Soon</Text>
-              </View>
-              <Text style={styles.arrow}>→</Text>
-            </View>
+            <Text style={styles.languageButtonText}>English 🇺🇸</Text>
+            <Text style={styles.languageButtonSubtext}>Children Stories</Text>
           </TouchableOpacity>
         </View>
         
-        <View style={styles.features}>
-          <Text style={styles.featuresTitle}>مميزات التطبيق:</Text>
-          <View style={styles.featureItem}>
-            <Text style={styles.featureIcon}>🎨</Text>
-            <Text style={styles.featureText}>قصص تفاعلية مع التشكيل الكامل</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <Text style={styles.featureIcon}>🎤</Text>
-            <Text style={styles.featureText}>إمكانية تسجيل القصة بصوتك</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <Text style={styles.featureIcon}>👶</Text>
-            <Text style={styles.featureText}>مخصص لكل عمر من 3-12 سنة</Text>
-          </View>
-        </View>
+        <Text style={styles.languageNote}>
+          القصص مكتوبة بالعربية الفصحى مع التشكيل الكامل للكلمات لتسهيل النطق
+        </Text>
       </View>
     </SafeAreaView>
   );
-};
+}
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#E8F4FD',
   },
-  content: {
+  languageContainer: {
     flex: 1,
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 40,
-    borderTopRightRadius: 40,
-    paddingHorizontal: 25,
-    paddingTop: 40,
-    marginTop: height * 0.1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 30,
   },
-  title: {
-    fontSize: 42,
-    fontWeight: 'bold',
-    color: '#4CAF50',
-    textAlign: 'center',
-    marginBottom: 10,
-  },
-  subtitle: {
-    fontSize: 18,
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 40,
-  },
-  logo: {
-    width: width * 0.7,
-    height: width * 0.7,
-    alignSelf: 'center',
-    marginBottom: 40,
-  },
-  languageSection: {
-    marginBottom: 40,
-  },
-  sectionTitle: {
+  languageTitle: {
     fontSize: 20,
-    fontWeight: '600',
-    color: '#333',
+    fontWeight: 'bold',
+    textAlign: 'center',
     marginBottom: 20,
-    textAlign: 'right',
+    color: '#2C3E50',
+  },
+  languageImage: {
+    width: '100%',
+    height: 250,
+    marginBottom: 40,
+    borderRadius: 15,
+  },
+  languageButtons: {
+    width: '100%',
+    flexDirection: 'column',
+    gap: 20,
+    marginBottom: 30,
   },
   languageButton: {
-    backgroundColor: '#f8f9fa',
+    padding: 25,
     borderRadius: 20,
-    padding: 20,
-    marginBottom: 15,
-    borderWidth: 2,
-    borderColor: '#E8F5E9',
-  },
-  disabledButton: {
-    opacity: 0.6,
-  },
-  languageContent: {
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 5,
   },
-  flag: {
-    fontSize: 32,
+  arabicButton: {
+    backgroundColor: '#4A90E2',
   },
-  textContainer: {
-    flex: 1,
-    marginHorizontal: 15,
+  englishButton: {
+    backgroundColor: '#FF6B6B',
   },
-  languageName: {
+  languageButtonText: {
+    color: '#FFFFFF',
     fontSize: 22,
     fontWeight: 'bold',
-    color: '#333',
-    textAlign: 'right',
+    marginBottom: 5,
   },
-  languageDesc: {
+  languageButtonSubtext: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 16,
+  },
+  languageNote: {
     fontSize: 14,
-    color: '#666',
-    textAlign: 'right',
-    marginTop: 5,
-  },
-  comingSoon: {
-    color: '#FF9800',
-    fontWeight: '600',
-  },
-  arrow: {
-    fontSize: 24,
-    color: '#4CAF50',
-    fontWeight: 'bold',
-  },
-  features: {
-    backgroundColor: '#F0F9FF',
-    borderRadius: 20,
-    padding: 25,
-  },
-  featuresTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#2196F3',
-    marginBottom: 15,
-    textAlign: 'right',
-  },
-  featureItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  featureIcon: {
-    fontSize: 20,
-    marginLeft: 10,
-  },
-  featureText: {
-    fontSize: 15,
-    color: '#555',
-    flex: 1,
-    textAlign: 'right',
+    color: '#5D6D7E',
+    textAlign: 'center',
+    marginTop: 20,
+    fontStyle: 'italic',
   },
 });
-
-export default LanguageScreen;

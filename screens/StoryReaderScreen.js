@@ -1,503 +1,326 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
-  ScrollView,
   StyleSheet,
-  TouchableOpacity,
-  SafeAreaView,
-  Alert,
   Image,
-  Dimensions,
-  ActivityIndicator,
+  ScrollView,
+  TouchableOpacity,
+  Alert
 } from 'react-native';
 import * as Speech from 'expo-speech';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const { width, height } = Dimensions.get('window');
+export default function StoryReaderScreen({ route, navigation, childInfo }) {
+  const { story, packId, packTitle } = route.params || {};
+  const [partIndex, setPartIndex] = useState(0);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
 
-const StoryReaderScreen = ({ navigation, route }) => {
-  const { story, childData } = route.params;
-  const [currentPage, setCurrentPage] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [autoPlay, setAutoPlay] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [savedRecordings, setSavedRecordings] = useState([]);
-  const speechTimeoutRef = useRef(null);
-
-  // محتوى قصة علبة الألوان (القصة المجانية الوحيدة)
-  const storyContent = story.content || [
-    {
-      text: 'هذه القصة غير متاحة بعد. قم بشراء القصة لقراءتها.',
-      image: 'https://img.freepik.com/free-vector/children-reading-books_1308-200.jpg'
-    }
-  ];
-
-  // تحميل التسجيلات المحفوظة
-  useEffect(() => {
-    loadSavedRecordings();
-  }, []);
-
-  // التأكد من إيقاف الكلام عند ترك الشاشة
+  // إيقاف الكلام عند ترك الشاشة
   useEffect(() => {
     return () => {
-      if (speechTimeoutRef.current) {
-        clearTimeout(speechTimeoutRef.current);
-      }
       Speech.stop();
-      setIsPlaying(false);
+      setIsPlayingAudio(false);
     };
   }, []);
 
-  // عند انتهاء الكلام، الانتقال للصفحة التالية إذا كان autoPlay مفعلاً
-  useEffect(() => {
-    if (autoPlay && !isPlaying && currentPage < storyContent.length - 1) {
-      speechTimeoutRef.current = setTimeout(() => {
-        setCurrentPage(prev => prev + 1);
-        playAudio(currentPage + 1);
-      }, 1000);
-    }
-    
-    return () => {
-      if (speechTimeoutRef.current) {
-        clearTimeout(speechTimeoutRef.current);
-      }
-    };
-  }, [isPlaying, autoPlay, currentPage]);
+  if (!story) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.errorText}>لم يتم العثور على القصة</Text>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.backButtonText}>العودة</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
-  const loadSavedRecordings = async () => {
-    try {
-      const recordings = await AsyncStorage.getItem('storyRecordings');
-      if (recordings) {
-        const parsed = JSON.parse(recordings);
-        const storyRecordings = parsed.filter(r => r.storyId === story.id);
-        setSavedRecordings(storyRecordings);
-      }
-    } catch (error) {
-      console.error('Error loading recordings:', error);
-    }
-  };
+  const storyParts = story.storyParts || [];
+  const currentPart = storyParts[partIndex] || {};
+  const totalParts = storyParts.length;
 
-  const playAudio = async (pageIndex = currentPage) => {
+  const playAudioForStory = async () => {
     try {
-      if (isPlaying) {
+      if (isPlayingAudio) {
         await Speech.stop();
-        setIsPlaying(false);
-        setAutoPlay(false);
+        setIsPlayingAudio(false);
         return;
       }
 
-      const text = storyContent[pageIndex]?.text || storyContent[pageIndex];
-      if (!text) return;
+      const storyText = currentPart.text;
+      if (!storyText) {
+        Alert.alert('خطأ', 'النص غير متوفر');
+        return;
+      }
 
-      setIsLoading(true);
-      setIsPlaying(true);
+      setIsPlayingAudio(true);
       
-      await Speech.speak(text, {
-        language: 'ar-SA',
+      await Speech.speak(storyText, {
+        language: 'ar-EG', // تغيير اللغة إلى مصرية
         pitch: 1.0,
         rate: 0.75,
         volume: 1.0,
-        onStart: () => setIsLoading(false),
-        onDone: () => {
-          setIsPlaying(false);
-          if (autoPlay && pageIndex < storyContent.length - 1) {
-            // الانتقال التلقائي للصفحة التالية
-            setTimeout(() => {
-              setCurrentPage(pageIndex + 1);
-            }, 500);
-          }
-        },
-        onError: () => {
-          setIsPlaying(false);
-          setIsLoading(false);
+        onDone: () => setIsPlayingAudio(false),
+        onStopped: () => setIsPlayingAudio(false),
+        onError: (error) => {
+          console.error('Speech error:', error);
+          setIsPlayingAudio(false);
+          Alert.alert('خطأ', 'تعذر تشغيل الصوت');
         }
       });
+      
     } catch (error) {
       console.error('Error playing audio:', error);
-      setIsPlaying(false);
-      setIsLoading(false);
+      setIsPlayingAudio(false);
       Alert.alert('خطأ', 'حدث خطأ أثناء تشغيل الصوت');
     }
   };
 
-  const playFullStory = async () => {
-    if (isPlaying) {
-      await Speech.stop();
-      setIsPlaying(false);
-      setAutoPlay(false);
-      return;
-    }
-    
-    setAutoPlay(true);
-    await playAudio(currentPage);
-  };
-
-  const stopAudio = async () => {
-    await Speech.stop();
-    setIsPlaying(false);
-    setAutoPlay(false);
-  };
-
-  const nextPage = () => {
-    if (currentPage < storyContent.length - 1) {
-      setCurrentPage(currentPage + 1);
-      if (autoPlay || isPlaying) {
-        stopAudio();
-        setTimeout(() => {
-          if (autoPlay) {
-            playAudio(currentPage + 1);
-          }
-        }, 300);
-      }
+  const handleNext = () => {
+    if (partIndex < totalParts - 1) {
+      Speech.stop();
+      setIsPlayingAudio(false);
+      setPartIndex(partIndex + 1);
     } else {
-      showCompletionAlert();
+      Speech.stop();
+      setIsPlayingAudio(false);
+      navigation.navigate('StoryEnd', { story, packTitle });
     }
   };
 
-  const prevPage = () => {
-    if (currentPage > 0) {
-      setCurrentPage(currentPage - 1);
-      if (autoPlay || isPlaying) {
-        stopAudio();
-        setTimeout(() => {
-          if (autoPlay) {
-            playAudio(currentPage - 1);
-          }
-        }, 300);
-      }
+  const handlePrevious = () => {
+    if (partIndex > 0) {
+      Speech.stop();
+      setIsPlayingAudio(false);
+      setPartIndex(partIndex - 1);
     }
-  };
-
-  const showCompletionAlert = () => {
-    Alert.alert(
-      'تهانينا! 🎉',
-      `لقد أنهيت قراءة قصة "${story.title}"`,
-      [
-        {
-          text: 'العودة للمكتبة',
-          onPress: () => navigation.navigate('StoryLibrary', { childData })
-        },
-        {
-          text: 'قراءة مرة أخرى',
-          onPress: () => {
-            setCurrentPage(0);
-            setAutoPlay(false);
-            stopAudio();
-          }
-        },
-        {
-          text: 'تسجيل القصة بصوتي',
-          onPress: () => navigation.navigate('Recording', { story, childData })
-        }
-      ]
-    );
-  };
-
-  const currentContent = storyContent[currentPage];
-  const text = currentContent?.text || currentContent;
-  const image = currentContent?.image;
-
-  const formatTime = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* Header مع معلومات الصفحة */}
+    <View style={styles.container}>
+      {/* الهيدر */}
       <View style={styles.header}>
-        <View style={styles.headerContent}>
+        <View style={styles.headerLeft}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.backButtonText}>↩️</Text>
+          </TouchableOpacity>
+        </View>
+        
+        <View style={styles.headerCenter}>
           <Text style={styles.storyTitle} numberOfLines={1}>
             {story.title}
           </Text>
-          <Text style={styles.pageCounter}>
-            صفحة {currentPage + 1} من {storyContent.length}
+          <Text style={styles.pageIndicator}>
+            {partIndex + 1} / {totalParts}
           </Text>
         </View>
+        
+        <View style={styles.headerRight}>
+          {childInfo?.name && (
+            <Text style={styles.readerName}>{childInfo.name}</Text>
+          )}
+        </View>
       </View>
-
-      <ScrollView 
-        style={styles.contentContainer}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* صورة الصفحة إذا موجودة */}
-        {image && (
-          <Image 
-            source={{ uri: image }} 
-            style={styles.pageImage} 
-            resizeMode="cover"
-          />
-        )}
-
-        {/* نص الصفحة */}
-        <View style={styles.textContainer}>
+      
+      {/* المحتوى */}
+      <ScrollView style={styles.content}>
+        <View style={styles.storyContent}>
+          {/* زر الصوت */}
+          <TouchableOpacity 
+            style={[
+              styles.audioButton,
+              isPlayingAudio && styles.audioButtonActive
+            ]}
+            onPress={playAudioForStory}
+          >
+            <Text style={styles.audioButtonText}>
+              {isPlayingAudio ? '⏸️ إيقاف' : '▶️ استمع للقصة'}
+            </Text>
+          </TouchableOpacity>
+          
+          {/* الصورة */}
+          {currentPart.image && (
+            <Image 
+              source={{ uri: currentPart.image }} 
+              style={styles.storyImage} 
+              resizeMode="cover"
+            />
+          )}
+          
+          {/* نص القصة */}
           <Text style={styles.storyText}>
-            {text}
+            {currentPart.text}
           </Text>
         </View>
-
-        {/* عرض التسجيلات المحفوظة لهذه القصة */}
-        {savedRecordings.length > 0 && (
-          <View style={styles.recordingsSection}>
-            <Text style={styles.recordingsTitle}>🎤 التسجيلات المحفوظة</Text>
-            {savedRecordings.slice(0, 3).map((recording) => (
-              <View key={recording.id} style={styles.recordingItem}>
-                <Text style={styles.recordingText}>
-                  تسجيل بواسطة: {recording.childName} • {formatTime(recording.duration)}
-                </Text>
-                <Text style={recordingDate}>
-                  {recording.date} {recording.time}
-                </Text>
-              </View>
-            ))}
-          </View>
-        )}
       </ScrollView>
-
-      {/* عناصر التحكم */}
-      <View style={styles.controls}>
-        {/* أزرار التحكم في الصفحات */}
-        <View style={styles.pageControls}>
-          <TouchableOpacity
-            style={[styles.navButton, currentPage === 0 && styles.disabledButton]}
-            onPress={prevPage}
-            disabled={currentPage === 0}
-          >
-            <Text style={styles.navButtonText}>⏪ الصفحة السابقة</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.navButton}
-            onPress={nextPage}
-          >
-            <Text style={styles.navButtonText}>
-              {currentPage < storyContent.length - 1 ? 'الصفحة التالية ⏩' : 'إنهاء القصة 🏁'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* أزرار التحكم في الصوت */}
-        <View style={styles.audioControls}>
-          <TouchableOpacity 
-            style={[styles.audioButton, isPlaying && styles.audioButtonActive]}
-            onPress={isPlaying ? stopAudio : () => playAudio()}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <ActivityIndicator color="#FFFFFF" size="small" />
-            ) : (
-              <Text style={styles.audioButtonText}>
-                {isPlaying ? '⏸️ إيقاف الصوت' : '▶️ استمع لهذه الصفحة'}
-              </Text>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={[styles.audioButton, styles.fullStoryButton, autoPlay && styles.audioButtonActive]}
-            onPress={playFullStory}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <ActivityIndicator color="#FFFFFF" size="small" />
-            ) : (
-              <Text style={styles.audioButtonText}>
-                {autoPlay ? '⏸️ إيقاف القصة كاملة' : '📖 استمع للقصة كاملة'}
-              </Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {/* زر تسجيل الصوت */}
+      
+      {/* أزرار التنقل */}
+      <View style={styles.navigationContainer}>
         <TouchableOpacity
-          style={styles.recordButton}
-          onPress={() => navigation.navigate('Recording', { story, childData })}
+          style={[
+            styles.navButton,
+            styles.prevButton,
+            partIndex === 0 && styles.disabledNavButton
+          ]}
+          onPress={handlePrevious}
+          disabled={partIndex === 0}
         >
-          <Text style={styles.recordButtonText}>🎤 سجل القصة بصوتك</Text>
+          <Text style={styles.navButtonText}>⏪ السابق</Text>
         </TouchableOpacity>
-
-        {/* معلومات القارئ */}
-        {childData && (
-          <View style={styles.readerInfo}>
-            <Text style={styles.readerText}>
-              القارئ: {childData.name} ({childData.age} سنة)
-            </Text>
-          </View>
-        )}
+        
+        <TouchableOpacity
+          style={[
+            styles.navButton,
+            styles.nextButton
+          ]}
+          onPress={handleNext}
+        >
+          <Text style={styles.navButtonText}>
+            {partIndex < totalParts - 1 ? '⏩ التالي' : '🏁 انتهاء'}
+          </Text>
+        </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </View>
   );
-};
+}
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff8e1',
+    backgroundColor: '#fff',
   },
   header: {
-    backgroundColor: '#4CAF50',
-    paddingVertical: 15,
-    paddingHorizontal: 20,
-    elevation: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 15,
+    backgroundColor: '#4A90E2',
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  headerLeft: {
+    width: 60,
+  },
+  headerCenter: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  headerRight: {
+    width: 60,
+    alignItems: 'flex-end',
+  },
+  storyTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#fff',
+    textAlign: 'center',
+  },
+  pageIndicator: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.8)',
+    marginTop: 4,
+  },
+  readerName: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontStyle: 'italic',
+  },
+  backButton: {
+    padding: 8,
+  },
+  backButtonText: {
+    fontSize: 20,
+    color: '#fff',
+  },
+  content: {
+    flex: 1,
+  },
+  storyContent: {
+    padding: 20,
+  },
+  audioButton: {
+    backgroundColor: '#FF9800',
+    padding: 15,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 20,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.2,
-    shadowRadius: 4,
-  },
-  headerContent: {
-    alignItems: 'center',
-  },
-  storyTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-    textAlign: 'center',
-    marginBottom: 5,
-  },
-  pageCounter: {
-    fontSize: 16,
-    color: '#E8F5E9',
-    textAlign: 'center',
-  },
-  contentContainer: {
-    flex: 1,
-  },
-  pageImage: {
-    width: width,
-    height: 250,
-    backgroundColor: '#F5F5F5',
-  },
-  textContainer: {
-    padding: 25,
-    backgroundColor: '#FFFFFF',
-    marginHorizontal: 20,
-    marginVertical: 20,
-    borderRadius: 20,
+    shadowRadius: 3,
     elevation: 3,
+  },
+  audioButtonActive: {
+    backgroundColor: '#FF6B6B',
+  },
+  audioButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  storyImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: 15,
+    marginBottom: 20,
+    backgroundColor: '#f5f5f5',
+  },
+  storyText: {
+    fontSize: 20,
+    lineHeight: 34,
+    color: '#2C3E50',
+    textAlign: 'right',
+    marginBottom: 20,
+  },
+  navigationContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 20,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
+  navButton: {
+    flex: 1,
+    padding: 15,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginHorizontal: 10,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
-    shadowRadius: 6,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  storyText: {
-    fontSize: 22,
-    lineHeight: 38,
-    color: '#3e2723',
-    textAlign: 'right',
-    textAlignVertical: 'center',
+  prevButton: {
+    backgroundColor: '#95A5A6',
   },
-  recordingsSection: {
-    backgroundColor: '#E8F5E9',
-    marginHorizontal: 20,
-    marginBottom: 20,
-    padding: 15,
-    borderRadius: 15,
+  nextButton: {
+    backgroundColor: '#4A90E2',
   },
-  recordingsTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#2E7D32',
-    marginBottom: 10,
-    textAlign: 'right',
-  },
-  recordingItem: {
-    backgroundColor: '#FFFFFF',
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 8,
-  },
-  recordingText: {
-    fontSize: 14,
-    color: '#333',
-    textAlign: 'right',
-    marginBottom: 5,
-  },
-  recordingDate: {
-    fontSize: 12,
-    color: '#666',
-    textAlign: 'right',
-    fontStyle: 'italic',
-  },
-  controls: {
-    backgroundColor: '#FFFFFF',
-    padding: 20,
-    borderTopLeftRadius: 25,
-    borderTopRightRadius: 25,
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-  },
-  pageControls: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 15,
-  },
-  navButton: {
-    backgroundColor: '#FF9800',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 12,
-    minWidth: width * 0.4,
-    alignItems: 'center',
-  },
-  disabledButton: {
-    backgroundColor: '#FFCC80',
-    opacity: 0.7,
+  disabledNavButton: {
+    backgroundColor: '#D6DBDF',
+    opacity: 0.5,
   },
   navButtonText: {
-    color: '#FFFFFF',
+    color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
   },
-  audioControls: {
-    marginBottom: 15,
-    gap: 10,
-  },
-  audioButton: {
-    backgroundColor: '#2196F3',
-    padding: 15,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 50,
-  },
-  audioButtonActive: {
-    backgroundColor: '#F44336',
-  },
-  fullStoryButton: {
-    backgroundColor: '#4CAF50',
-  },
-  audioButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  recordButton: {
-    backgroundColor: '#9C27B0',
-    padding: 15,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginBottom: 15,
-  },
-  recordButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  readerInfo: {
-    alignItems: 'center',
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
-  },
-  readerText: {
-    fontSize: 14,
-    color: '#666',
-    fontStyle: 'italic',
+  errorText: {
+    fontSize: 18,
+    color: 'red',
+    textAlign: 'center',
+    marginTop: 100,
   },
 });
-
-export default StoryReaderScreen;

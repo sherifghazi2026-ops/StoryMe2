@@ -1,486 +1,362 @@
 import React, { useState } from 'react';
 import { 
-  StyleSheet, 
-  Text, 
   View, 
-  Image, 
+  Text, 
   TextInput, 
-  TouchableOpacity,
+  TouchableOpacity, 
+  StyleSheet, 
+  Image,
   Alert,
-  SafeAreaView,
-  ScrollView,
-  Dimensions,
-  KeyboardAvoidingView,
-  Platform
+  Platform 
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 
-const { width } = Dimensions.get('window');
-
-const FormScreen = ({ navigation }) => {
+export default function FormScreen({ navigation, route, updateChildInfo }) {
+  const { language = 'ar' } = route.params || {};
   const [name, setName] = useState('');
   const [age, setAge] = useState('');
   const [gender, setGender] = useState('');
   const [childPhoto, setChildPhoto] = useState(null);
-  const [errors, setErrors] = useState({});
 
-  const validateForm = () => {
-    const newErrors = {};
-    
-    if (!name.trim()) {
-      newErrors.name = 'يرجى إدخال اسم الطفل';
-    }
-    
-    if (!age.trim()) {
-      newErrors.age = 'يرجى إدخال عمر الطفل';
-    } else if (isNaN(age) || parseInt(age) < 1 || parseInt(age) > 12) {
-      newErrors.age = 'العمر يجب أن يكون بين 1 و 12 سنة';
-    }
-    
-    if (!gender) {
-      newErrors.gender = 'يرجى اختيار جنس الطفل';
-    }
-    
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
-
-  const pickImage = async () => {
+  const pickImage = async (source = 'library') => {
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      let result;
       
-      if (status !== 'granted') {
-        Alert.alert(
-          'صلاحية الملفات',
-          'نحتاج صلاحية الوصول للصور لاختيار صورة الطفل',
-          [
-            { text: 'إلغاء', style: 'cancel' },
-            { text: 'فتح الإعدادات', onPress: () => {} }
-          ]
-        );
-        return;
+      if (source === 'camera') {
+        // طلب صلاحية الكاميرا
+        if (Platform.OS === 'web') {
+          Alert.alert('معلومات', 'الكاميرا غير متاحة على المتصفح');
+          return;
+        }
+        
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert(
+            'صلاحية الكاميرا',
+            'نحتاج صلاحية الوصول للكاميرا لالتقاط الصور',
+            [
+              { text: 'إلغاء', style: 'cancel' },
+              { text: 'فتح الإعدادات', onPress: () => {} }
+            ]
+          );
+          return;
+        }
+        
+        result = await ImagePicker.launchCameraAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.7,
+        });
+      } else {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        
+        if (status !== 'granted') {
+          Alert.alert('صلاحية المعرض', 'نحتاج صلاحية الوصول للصور');
+          return;
+        }
+
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.8,
+        });
       }
 
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-
-      if (!result.canceled) {
+      if (!result.canceled && result.assets && result.assets[0]) {
         setChildPhoto(result.assets[0].uri);
       }
     } catch (error) {
+      console.error('Error picking image:', error);
       Alert.alert('خطأ', 'حدث خطأ أثناء اختيار الصورة');
     }
   };
 
-  const takePhoto = async () => {
-    try {
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      
-      if (status !== 'granted') {
-        Alert.alert(
-          'صلاحية الكاميرا',
-          'نحتاج صلاحية الكاميرا لالتقاط صورة الطفل',
-          [
-            { text: 'إلغاء', style: 'cancel' },
-            { text: 'فتح الإعدادات', onPress: () => {} }
-          ]
-        );
-        return;
-      }
-
-      const result = await ImagePicker.launchCameraAsync({
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-
-      if (!result.canceled) {
-        setChildPhoto(result.assets[0].uri);
-      }
-    } catch (error) {
-      Alert.alert('خطأ', 'حدث خطأ أثناء التقاط الصورة');
+  const handleSubmit = () => {
+    if (!name.trim()) {
+      Alert.alert('خطأ', 'يرجى إدخال اسم الطفل');
+      return;
     }
-  };
 
-  const handleContinue = () => {
-    if (validateForm()) {
-      const childData = {
-        name,
-        age,
-        gender,
-        photo: childPhoto,
-        id: Date.now().toString()
-      };
-      
-      navigation.navigate('StoryLibrary', { childData });
+    if (!age.trim()) {
+      Alert.alert('خطأ', 'يرجى إدخال عمر الطفل');
+      return;
     }
+
+    // التحقق من صحة العمر
+    const ageNumber = parseInt(age, 10);
+    if (isNaN(ageNumber) || ageNumber < 1 || ageNumber > 18) {
+      Alert.alert('خطأ', 'يرجى إدخال عمر صحيح بين 1 و 18 سنة');
+      return;
+    }
+
+    if (!gender) {
+      Alert.alert('خطأ', 'يرجى اختيار جنس الطفل');
+      return;
+    }
+
+    const childData = {
+      name: name.trim(),
+      age: ageNumber.toString(),
+      gender,
+      photo: childPhoto,
+      language,
+      createdAt: new Date().toISOString()
+    };
+
+    updateChildInfo(childData);
+    navigation.navigate('StoryLibrary');
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
-        <ScrollView 
-          contentContainerStyle={styles.scrollContainer}
-          showsVerticalScrollIndicator={false}
-        >
-          <View style={styles.header}>
-            <Text style={styles.title}>👶 بيانات الطفل</Text>
-            <Text style={styles.subtitle}>املأ بيانات طفلك للاستفادة القصوى من التطبيق</Text>
-          </View>
+      <View style={styles.formContainer}>
+        <Text style={styles.title}>قصص الأطفال 📚</Text>
 
-          <View style={styles.formCard}>
-            {/* حقل الاسم */}
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>
-                اسم الطفل <Text style={styles.required}>*</Text>
-              </Text>
-              <TextInput
-                style={[styles.input, errors.name && styles.inputError]}
-                placeholder="أدخل اسم الطفل هنا"
-                placeholderTextColor="#999"
-                value={name}
-                onChangeText={(text) => {
-                  setName(text);
-                  if (errors.name) setErrors({...errors, name: ''});
-                }}
-                textAlign="right"
-                maxLength={30}
-              />
-              {errors.name && <Text style={styles.errorText}>{errors.name}</Text>}
-            </View>
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>اسم الطفل *</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="أدخل اسم الطفل"
+            value={name}
+            onChangeText={setName}
+            textAlign="right"
+            autoCorrect={false}
+          />
+        </View>
 
-            {/* حقل العمر */}
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>
-                عمر الطفل <Text style={styles.required}>*</Text>
-              </Text>
-              <TextInput
-                style={[styles.input, errors.age && styles.inputError]}
-                placeholder="أدخل عمر الطفل بالأرقام"
-                placeholderTextColor="#999"
-                value={age}
-                onChangeText={(text) => {
-                  setAge(text.replace(/[^0-9]/g, ''));
-                  if (errors.age) setErrors({...errors, age: ''});
-                }}
-                keyboardType="numeric"
-                textAlign="right"
-                maxLength={2}
-              />
-              {errors.age && <Text style={styles.errorText}>{errors.age}</Text>}
-            </View>
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>العمر *</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="أدخل العمر (مثال: 6)"
+            keyboardType="numeric"
+            value={age}
+            onChangeText={setAge}
+            textAlign="right"
+            maxLength={2}
+          />
+        </View>
 
-            {/* حقل الجنس */}
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>
-                جنس الطفل <Text style={styles.required}>*</Text>
-              </Text>
-              <View style={styles.genderContainer}>
-                <TouchableOpacity
-                  style={[
-                    styles.genderButton,
-                    gender === 'ولد' && styles.genderActive,
-                  ]}
-                  onPress={() => {
-                    setGender('ولد');
-                    if (errors.gender) setErrors({...errors, gender: ''});
-                  }}
-                >
-                  <Text style={[
-                    styles.genderIcon,
-                    gender === 'ولد' && styles.genderIconActive
-                  ]}>👦</Text>
-                  <Text style={[
-                    styles.genderText,
-                    gender === 'ولد' && styles.genderTextActive
-                  ]}>ولد</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.genderButton,
-                    gender === 'بنت' && styles.genderActive,
-                  ]}
-                  onPress={() => {
-                    setGender('بنت');
-                    if (errors.gender) setErrors({...errors, gender: ''});
-                  }}
-                >
-                  <Text style={[
-                    styles.genderIcon,
-                    gender === 'بنت' && styles.genderIconActive
-                  ]}>👧</Text>
-                  <Text style={[
-                    styles.genderText,
-                    gender === 'بنت' && styles.genderTextActive
-                  ]}>بنت</Text>
-                </TouchableOpacity>
-              </View>
-              {errors.gender && <Text style={styles.errorText}>{errors.gender}</Text>}
-            </View>
-
-            {/* رفع الصورة */}
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>صورة الطفل (اختياري)</Text>
-              <Text style={styles.hint}>يمكنك اختيار صورة من المعرض أو التقاط صورة جديدة</Text>
-              
-              <View style={styles.photoButtons}>
-                <TouchableOpacity style={styles.photoButton} onPress={pickImage}>
-                  <Text style={styles.photoButtonIcon}>📁</Text>
-                  <Text style={styles.photoButtonText}>اختيار صورة</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity style={styles.photoButton} onPress={takePhoto}>
-                  <Text style={styles.photoButtonIcon}>📸</Text>
-                  <Text style={styles.photoButtonText}>التقاط صورة</Text>
-                </TouchableOpacity>
-              </View>
-
-              {childPhoto && (
-                <View style={styles.photoPreview}>
-                  <Image source={{ uri: childPhoto }} style={styles.childPhoto} />
-                  <TouchableOpacity 
-                    style={styles.removePhoto}
-                    onPress={() => setChildPhoto(null)}
-                  >
-                    <Text style={styles.removePhotoText}>✕</Text>
-                  </TouchableOpacity>
-                  <Text style={styles.photoPreviewText}>صورة الطفل</Text>
-                </View>
-              )}
-            </View>
-
-            {/* زر المتابعة */}
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>الجنس *</Text>
+          <View style={styles.genderContainer}>
             <TouchableOpacity
               style={[
-                styles.continueButton,
-                (!name || !age || !gender) && styles.continueButtonDisabled
+                styles.genderOption,
+                gender === 'ولد' && styles.activeGender,
               ]}
-              onPress={handleContinue}
-              disabled={!name || !age || !gender}
+              onPress={() => setGender('ولد')}
             >
-              <Text style={styles.continueButtonText}>
-                📖 الذهاب لمكتبة القصص
-              </Text>
-              <Text style={styles.continueButtonSubtext}>
-                {name ? `مرحباً ${name} 👋` : 'املأ البيانات أولاً'}
-              </Text>
+              <Text style={[
+                styles.genderText,
+                gender === 'ولد' && styles.activeGenderText
+              ]}>👦 ولد</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.genderOption,
+                gender === 'بنت' && styles.activeGender,
+              ]}
+              onPress={() => setGender('بنت')}
+            >
+              <Text style={[
+                styles.genderText,
+                gender === 'بنت' && styles.activeGenderText
+              ]}>👧 بنت</Text>
             </TouchableOpacity>
           </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </View>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.label}>صورة الطفل (اختياري)</Text>
+          <View style={styles.photoButtonsContainer}>
+            <TouchableOpacity 
+              style={styles.photoButton}
+              onPress={() => pickImage('library')}
+            >
+              <Text style={styles.photoButtonText}>🖼️ اختر صورة</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={styles.photoButton}
+              onPress={() => pickImage('camera')}
+            >
+              <Text style={styles.photoButtonText}>📷 التقط صورة</Text>
+            </TouchableOpacity>
+          </View>
+          
+          {childPhoto && (
+            <View style={styles.photoPreviewContainer}>
+              <Image source={{ uri: childPhoto }} style={styles.childPhoto} />
+              <TouchableOpacity 
+                style={styles.removePhotoButton}
+                onPress={() => setChildPhoto(null)}
+              >
+                <Text style={styles.removePhotoText}>❌ حذف الصورة</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.buttonContainer}>
+          <TouchableOpacity
+            style={[styles.submitButton, (!name || !age || !gender) && styles.disabledButton]}
+            disabled={!name || !age || !gender}
+            onPress={handleSubmit}
+          >
+            <Text style={styles.submitButtonText}>اختر قصة ممتعة 🚀</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Text style={styles.backButtonText}>↩️ العودة لاختيار اللغة</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
     </SafeAreaView>
   );
-};
+}
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F8F9FA',
+    backgroundColor: '#E8F4FD',
   },
-  keyboardView: {
+  formContainer: {
     flex: 1,
-  },
-  scrollContainer: {
-    flexGrow: 1,
-    paddingBottom: 30,
-  },
-  header: {
-    paddingHorizontal: 25,
-    paddingTop: 20,
-    paddingBottom: 15,
-    backgroundColor: '#4CAF50',
-    borderBottomLeftRadius: 30,
-    borderBottomRightRadius: 30,
+    padding: 20,
   },
   title: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: 'bold',
-    color: '#fff',
     textAlign: 'center',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: 'rgba(255, 255, 255, 0.9)',
-    textAlign: 'center',
-  },
-  formCard: {
-    backgroundColor: '#fff',
-    marginHorizontal: 20,
-    marginTop: 20,
-    borderRadius: 25,
-    padding: 25,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 5,
+    marginBottom: 30,
+    color: '#2C3E50',
   },
   inputGroup: {
     marginBottom: 25,
   },
   label: {
-    fontSize: 17,
+    fontSize: 16,
     fontWeight: '600',
-    color: '#333',
-    marginBottom: 10,
+    color: '#2C3E50',
+    marginBottom: 8,
     textAlign: 'right',
-  },
-  required: {
-    color: '#FF5252',
   },
   input: {
-    backgroundColor: '#F8F9FA',
-    padding: 16,
+    backgroundColor: '#fff',
+    padding: 15,
     borderRadius: 12,
     fontSize: 16,
-    borderWidth: 1.5,
-    borderColor: '#E9ECEF',
-    textAlign: 'right',
-    color: '#333',
-  },
-  inputError: {
-    borderColor: '#FF5252',
-    backgroundColor: '#FFF5F5',
-  },
-  errorText: {
-    color: '#FF5252',
-    fontSize: 14,
-    marginTop: 6,
-    textAlign: 'right',
-  },
-  hint: {
-    fontSize: 14,
-    color: '#6C757D',
-    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: '#D6DBDF',
     textAlign: 'right',
   },
   genderContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 15,
+    justifyContent: 'space-around',
+    marginTop: 10,
   },
-  genderButton: {
-    flex: 1,
-    backgroundColor: '#F8F9FA',
-    borderRadius: 15,
-    padding: 18,
-    alignItems: 'center',
+  genderOption: {
+    paddingVertical: 15,
+    paddingHorizontal: 30,
+    borderRadius: 12,
     borderWidth: 2,
-    borderColor: 'transparent',
+    borderColor: '#D6DBDF',
+    backgroundColor: '#F8F9F9',
+    alignItems: 'center',
+    minWidth: 120,
   },
-  genderActive: {
-    backgroundColor: '#E8F5E9',
-    borderColor: '#4CAF50',
-  },
-  genderIcon: {
-    fontSize: 36,
-    marginBottom: 8,
-  },
-  genderIconActive: {
-    transform: [{ scale: 1.1 }],
+  activeGender: {
+    backgroundColor: '#4A90E2',
+    borderColor: '#4A90E2',
   },
   genderText: {
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '600',
-    color: '#666',
+    color: '#5D6D7E',
   },
-  genderTextActive: {
-    color: '#4CAF50',
-    fontWeight: 'bold',
+  activeGenderText: {
+    color: '#FFFFFF',
   },
-  photoButtons: {
+  photoButtonsContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: 15,
-    marginBottom: 20,
+    marginTop: 10,
   },
   photoButton: {
     flex: 1,
-    backgroundColor: '#F0F9FF',
-    borderRadius: 12,
+    backgroundColor: '#2196F3',
     padding: 15,
+    borderRadius: 12,
     alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#B3E5FC',
-    borderStyle: 'dashed',
-  },
-  photoButtonIcon: {
-    fontSize: 24,
-    marginBottom: 8,
+    marginHorizontal: 5,
   },
   photoButtonText: {
-    fontSize: 14,
+    color: '#fff',
+    fontSize: 16,
     fontWeight: '600',
-    color: '#0288D1',
   },
-  photoPreview: {
+  photoPreviewContainer: {
     alignItems: 'center',
-    marginTop: 10,
+    marginTop: 15,
   },
   childPhoto: {
     width: 150,
     height: 150,
     borderRadius: 75,
-    borderWidth: 4,
-    borderColor: '#4CAF50',
+    borderWidth: 3,
+    borderColor: '#4A90E2',
+    marginBottom: 10,
   },
-  removePhoto: {
-    position: 'absolute',
-    top: 5,
-    right: width * 0.4,
-    backgroundColor: '#FF5252',
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
+  removePhotoButton: {
+    backgroundColor: '#FF6B6B',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
   },
   removePhotoText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  buttonContainer: {
+    marginTop: 20,
+  },
+  submitButton: {
+    backgroundColor: '#4A90E2',
+    padding: 18,
+    borderRadius: 15,
+    alignItems: 'center',
+    shadowColor: '#4A90E2',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
+    marginBottom: 15,
+  },
+  disabledButton: {
+    backgroundColor: '#AAB7B8',
+    shadowOpacity: 0,
+  },
+  submitButtonText: {
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
   },
-  photoPreviewText: {
-    marginTop: 10,
-    fontSize: 14,
-    color: '#666',
-    fontStyle: 'italic',
-  },
-  continueButton: {
-    backgroundColor: '#4CAF50',
-    borderRadius: 15,
-    padding: 20,
+  backButton: {
+    padding: 12,
     alignItems: 'center',
-    marginTop: 20,
-    shadowColor: '#4CAF50',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
   },
-  continueButtonDisabled: {
-    backgroundColor: '#A5D6A7',
-    shadowOpacity: 0,
-  },
-  continueButtonText: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: 'bold',
-    marginBottom: 5,
-  },
-  continueButtonSubtext: {
-    color: 'rgba(255, 255, 255, 0.9)',
+  backButtonText: {
+    color: '#5D6D7E',
     fontSize: 14,
+    textAlign: 'center',
   },
 });
-
-export default FormScreen;
