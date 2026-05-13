@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict cGg6KgfFseUhuJu8BoCs63sC1HQwdtqtVPZIgjOPVdqTI7bE4CUiWdneATJkUwL
+\restrict rMfmasJoqsMsUQqWlVUgp1MNyiGijSDE9jNFVaKi4jraJrbxpaQP5jQeHhJTna7
 
 -- Dumped from database version 17.6
 -- Dumped by pg_dump version 18.2
@@ -808,6 +808,168 @@ CREATE FUNCTION pgbouncer.get_auth(p_usename text) RETURNS TABLE(username text, 
 ALTER FUNCTION pgbouncer.get_auth(p_usename text) OWNER TO supabase_admin;
 
 --
+-- Name: auto_create_merchant_for_full_service(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.auto_create_merchant_for_full_service() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  INSERT INTO profiles (id, full_name, phone, password, role, merchant_type, is_verified, active)
+    VALUES (gen_random_uuid(), NEW.name, '01000000000', '1234', 'merchant', NEW.service_id, true, true)
+      ON CONFLICT (phone) DO NOTHING;
+        RETURN NEW;
+        END;
+        $$;
+
+
+ALTER FUNCTION public.auto_create_merchant_for_full_service() OWNER TO postgres;
+
+--
+-- Name: auto_create_merchant_record(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.auto_create_merchant_record() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  -- إذا كان الدور تاجر، أضفه لجدول merchants
+    IF NEW.role = 'merchant' THEN
+        INSERT INTO merchants (id, user_id, name, phone, service_type, is_active, created_at, updated_at)
+            VALUES (
+                  NEW.id,
+                        NEW.id,
+                              NEW.full_name,
+                                    NEW.phone,
+                                          NEW.merchant_type,
+                                                true,
+                                                      NOW(),
+                                                            NOW()
+                                                                )
+                                                                    ON CONFLICT (id) DO UPDATE SET
+                                                                          name = NEW.full_name,
+                                                                                phone = NEW.phone,
+                                                                                      service_type = NEW.merchant_type,
+                                                                                            updated_at = NOW();
+                                                                                              END IF;
+                                                                                                RETURN NEW;
+                                                                                                END;
+                                                                                                $$;
+
+
+ALTER FUNCTION public.auto_create_merchant_record() OWNER TO postgres;
+
+--
+-- Name: check_duplicate_field(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.check_duplicate_field() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  -- إذا كان هناك حقل مكرر بنفس الاسم لنفس الخدمة الفرعية، احذف القديم أولاً
+    DELETE FROM service_fields 
+      WHERE sub_service_id = NEW.sub_service_id 
+          AND field_name = NEW.field_name 
+              AND id != NEW.id;
+                RETURN NEW;
+                END;
+                $$;
+
+
+ALTER FUNCTION public.check_duplicate_field() OWNER TO postgres;
+
+--
+-- Name: copy_merchant_on_new_service(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.copy_merchant_on_new_service() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.type = 'full_service' AND NEW.full_service_id IS NOT NULL THEN
+      -- انسخ التاجر من الخدمة الشاملة المرتبطة
+          INSERT INTO profiles (id, full_name, phone, password, role, merchant_type, is_verified, active, created_at, updated_at)
+              SELECT 
+                    gen_random_uuid(),
+                          p.full_name,
+                                p.phone,
+                                      p.password,
+                                            'merchant',
+                                                  NEW.id,  -- استخدام id الخدمة الجديدة
+                                                        true,
+                                                              true,
+                                                                    NOW(),
+                                                                          NOW()
+                                                                              FROM profiles p
+                                                                                  WHERE p.merchant_type = (SELECT service_id FROM full_services WHERE id = NEW.full_service_id)
+                                                                                      AND p.role = 'merchant'
+                                                                                          ON CONFLICT (phone) DO NOTHING;
+                                                                                            END IF;
+                                                                                              RETURN NEW;
+                                                                                              END;
+                                                                                              $$;
+
+
+ALTER FUNCTION public.copy_merchant_on_new_service() OWNER TO postgres;
+
+--
+-- Name: copy_service_fields_on_new_sub(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.copy_service_fields_on_new_sub() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  -- انسخ الحقول من خدمة فرعية بنفس الاسم من خدمة شاملة أخرى
+    INSERT INTO service_fields (service_id, field_name, field_label, field_type, is_required, sort_order, sub_service_name)
+      SELECT 
+          NEW.name,
+              sf.field_name,
+                  sf.field_label,
+                      sf.field_type,
+                          sf.is_required,
+                              sf.sort_order,
+                                  NEW.name
+                                    FROM service_fields sf
+                                      WHERE sf.sub_service_name = NEW.name;
+                                        RETURN NEW;
+                                        END;
+                                        $$;
+
+
+ALTER FUNCTION public.copy_service_fields_on_new_sub() OWNER TO postgres;
+
+--
+-- Name: copy_sub_services_on_new_service(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.copy_sub_services_on_new_service() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF NEW.type = 'full_service' AND NEW.full_service_id IS NOT NULL THEN
+      -- انسخ الخدمات الفرعية من الخدمة الشاملة المختارة
+          INSERT INTO sub_services (full_service_id, name, icon, sort_order, is_active, show_title, image_url)
+              SELECT 
+                    NEW.id,
+                          ss.name,
+                                ss.icon,
+                                      ss.sort_order,
+                                            ss.is_active,
+                                                  ss.show_title,
+                                                        ss.image_url
+                                                            FROM sub_services ss
+                                                                WHERE ss.full_service_id = NEW.full_service_id;
+                                                                  END IF;
+                                                                    RETURN NEW;
+                                                                    END;
+                                                                    $$;
+
+
+ALTER FUNCTION public.copy_sub_services_on_new_service() OWNER TO postgres;
+
+--
 -- Name: delete_place_with_products(bigint); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
@@ -836,6 +998,111 @@ CREATE FUNCTION public.delete_place_with_products(place_id_param bigint) RETURNS
 ALTER FUNCTION public.delete_place_with_products(place_id_param bigint) OWNER TO postgres;
 
 --
+-- Name: notify_sound_update(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.notify_sound_update() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  -- إرسال إشعار صامت لكل التجار
+    PERFORM net.http_post(
+        'https://exp.host/--/api/v2/push/send',
+            json_build_object(
+                  'to', (SELECT array_agg(expo_push_token) FROM profiles WHERE role = 'merchant' AND expo_push_token IS NOT NULL),
+                        'title', 'تحديث التطبيق',
+                              'body', 'جاري تحديث إعدادات الصوت...',
+                                    'data', json_build_object(
+                                            'type', 'sound_update',
+                                                    'key', NEW.key,
+                                                            'url', NEW.value
+                                                                  ),
+                                                                        'priority', 'default',
+                                                                              'sound', null -- صامت
+                                                                                  )
+                                                                                    );
+                                                                                      RETURN NEW;
+                                                                                      END;
+                                                                                      $$;
+
+
+ALTER FUNCTION public.notify_sound_update() OWNER TO postgres;
+
+--
+-- Name: sync_full_service_data(text); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.sync_full_service_data(p_service_id text) RETURNS jsonb
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_source_service_id TEXT;
+    v_target_full_service_id UUID;
+      v_result JSONB;
+        v_source_full_service_id UUID;
+        BEGIN
+          -- الحصول على الـ UUID للخدمة الحالية
+            SELECT id INTO v_target_full_service_id FROM full_services WHERE service_id = p_service_id;
+              
+                -- تحديد الخدمة الأم (thomascook أو delivery)
+                  SELECT service_id INTO v_source_service_id
+                    FROM full_services 
+                      WHERE service_id IN ('thomascook', 'delivery')
+                        AND service_id != p_service_id
+                          LIMIT 1;
+                            
+                              IF v_source_service_id IS NOT NULL AND v_target_full_service_id IS NOT NULL THEN
+                                  SELECT id INTO v_source_full_service_id FROM full_services WHERE service_id = v_source_service_id;
+                                      
+                                          -- إضافة الخدمات الفرعية المفقودة فقط (بدون حذف)
+                                              INSERT INTO sub_services (full_service_id, name, icon, sort_order, is_active, show_title, image_url)
+                                                  SELECT 
+                                                        v_target_full_service_id,
+                                                              ss.name,
+                                                                    ss.icon,
+                                                                          ss.sort_order,
+                                                                                ss.is_active,
+                                                                                      ss.show_title,
+                                                                                            ss.image_url
+                                                                                                FROM sub_services ss
+                                                                                                    WHERE ss.full_service_id = v_source_full_service_id
+                                                                                                        AND NOT EXISTS (
+                                                                                                              SELECT 1 FROM sub_services s2 
+                                                                                                                    WHERE s2.full_service_id = v_target_full_service_id 
+                                                                                                                          AND s2.name = ss.name
+                                                                                                                              );
+                                                                                                                                  
+                                                                                                                                      -- إضافة الحقول المفقودة فقط (بدون حذف)
+                                                                                                                                          INSERT INTO service_fields (service_id, field_name, field_label, field_type, is_required, sort_order, sub_service_name, config)
+                                                                                                                                              SELECT 
+                                                                                                                                                    ss_new.name,
+                                                                                                                                                          sf.field_name,
+                                                                                                                                                                sf.field_label,
+                                                                                                                                                                      sf.field_type,
+                                                                                                                                                                            sf.is_required,
+                                                                                                                                                                                  sf.sort_order,
+                                                                                                                                                                                        ss_new.name,
+                                                                                                                                                                                              sf.config
+                                                                                                                                                                                                  FROM sub_services ss_new
+                                                                                                                                                                                                      CROSS JOIN service_fields sf
+                                                                                                                                                                                                          WHERE ss_new.full_service_id = v_target_full_service_id
+                                                                                                                                                                                                              AND sf.service_id IN (SELECT name FROM sub_services WHERE full_service_id = v_source_full_service_id)
+                                                                                                                                                                                                                  AND NOT EXISTS (
+                                                                                                                                                                                                                        SELECT 1 FROM service_fields sf2 
+                                                                                                                                                                                                                              WHERE sf2.service_id = ss_new.name 
+                                                                                                                                                                                                                                    AND sf2.field_name = sf.field_name
+                                                                                                                                                                                                                                        );
+                                                                                                                                                                                                                                          END IF;
+                                                                                                                                                                                                                                            
+                                                                                                                                                                                                                                              v_result := jsonb_build_object('success', true, 'message', 'تم التحديث بنجاح');
+                                                                                                                                                                                                                                                RETURN v_result;
+                                                                                                                                                                                                                                                END;
+                                                                                                                                                                                                                                                $$;
+
+
+ALTER FUNCTION public.sync_full_service_data(p_service_id text) OWNER TO postgres;
+
+--
 -- Name: update_modified_column(); Type: FUNCTION; Schema: public; Owner: postgres
 --
 
@@ -850,6 +1117,97 @@ BEGIN
 
 
 ALTER FUNCTION public.update_modified_column() OWNER TO postgres;
+
+--
+-- Name: upsert_full_service_with_subs(text, text, text, text); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.upsert_full_service_with_subs(p_service_id text, p_service_name text, p_icon text DEFAULT 'briefcase'::text, p_color text DEFAULT '#8B5CF6'::text) RETURNS jsonb
+    LANGUAGE plpgsql
+    AS $$
+        DECLARE
+          v_full_service_id UUID;
+            v_source_service_id TEXT;
+              v_source_full_service_id UUID;
+                v_result JSONB;
+                BEGIN
+                  -- 1. إضافة أو تحديث الخدمة في جدول services
+                    INSERT INTO services (id, name, type, icon, color, is_active, is_visible)
+                      VALUES (p_service_id, p_service_name, 'full_service', p_icon, p_color, true, true)
+                        ON CONFLICT (id) DO UPDATE SET
+                            name = EXCLUDED.name,
+                                icon = EXCLUDED.icon,
+                                    color = EXCLUDED.color,
+                                        updated_at = NOW()
+                                          RETURNING id INTO v_full_service_id;
+                                            
+                                              -- 2. إضافة أو تحديث الخدمة في جدول full_services
+                                                INSERT INTO full_services (service_id, name, icon, color, is_active)
+                                                  VALUES (p_service_id, p_service_name, p_icon, p_color, true)
+                                                    ON CONFLICT (service_id) DO UPDATE SET
+                                                        name = EXCLUDED.name,
+                                                            icon = EXCLUDED.icon,
+                                                                color = EXCLUDED.color,
+                                                                    updated_at = NOW()
+                                                                      RETURNING id INTO v_full_service_id;
+                                                                        
+                                                                          -- 3. نسخ الخدمات الفرعية من خدمة أم إذا كانت الخدمة جديدة
+                                                                            IF NOT EXISTS (SELECT 1 FROM sub_services WHERE full_service_id = v_full_service_id LIMIT 1) THEN
+                                                                                -- تحديد الخدمة الأم (أول خدمة شاملة موجودة غير نفسها)
+                                                                                    SELECT service_id INTO v_source_service_id
+                                                                                        FROM full_services 
+                                                                                            WHERE service_id != p_service_id 
+                                                                                                LIMIT 1;
+                                                                                                    
+                                                                                                        IF v_source_service_id IS NOT NULL THEN
+                                                                                                              SELECT id INTO v_source_full_service_id FROM full_services WHERE service_id = v_source_service_id;
+                                                                                                                    
+                                                                                                                          -- نسخ الخدمات الفرعية
+                                                                                                                                INSERT INTO sub_services (full_service_id, name, icon, sort_order, is_active, show_title, image_url)
+                                                                                                                                      SELECT 
+                                                                                                                                              v_full_service_id,
+                                                                                                                                                      ss.name,
+                                                                                                                                                              ss.icon,
+                                                                                                                                                                      ss.sort_order,
+                                                                                                                                                                              ss.is_active,
+                                                                                                                                                                                      ss.show_title,
+                                                                                                                                                                                              ss.image_url
+                                                                                                                                                                                                    FROM sub_services ss
+                                                                                                                                                                                                          WHERE ss.full_service_id = v_source_full_service_id
+                                                                                                                                                                                                                ON CONFLICT (full_service_id, name) DO NOTHING;
+                                                                                                                                                                                                                      
+                                                                                                                                                                                                                            -- نسخ الحقول المخصصة
+                                                                                                                                                                                                                                  INSERT INTO service_fields (service_id, field_name, field_label, field_type, is_required, sort_order, sub_service_name, config)
+                                                                                                                                                                                                                                        SELECT 
+                                                                                                                                                                                                                                                ss_new.name,
+                                                                                                                                                                                                                                                        sf.field_name,
+                                                                                                                                                                                                                                                                sf.field_label,
+                                                                                                                                                                                                                                                                        sf.field_type,
+                                                                                                                                                                                                                                                                                sf.is_required,
+                                                                                                                                                                                                                                                                                        sf.sort_order,
+                                                                                                                                                                                                                                                                                                ss_new.name,
+                                                                                                                                                                                                                                                                                                        sf.config
+                                                                                                                                                                                                                                                                                                              FROM sub_services ss_new
+                                                                                                                                                                                                                                                                                                                    CROSS JOIN service_fields sf
+                                                                                                                                                                                                                                                                                                                          WHERE ss_new.full_service_id = v_full_service_id
+                                                                                                                                                                                                                                                                                                                                AND sf.service_id IN (SELECT name FROM sub_services WHERE full_service_id = v_source_full_service_id)
+                                                                                                                                                                                                                                                                                                                                      ON CONFLICT (service_id, field_name) DO NOTHING;
+                                                                                                                                                                                                                                                                                                                                          END IF;
+                                                                                                                                                                                                                                                                                                                                            END IF;
+                                                                                                                                                                                                                                                                                                                                              
+                                                                                                                                                                                                                                                                                                                                                v_result := jsonb_build_object(
+                                                                                                                                                                                                                                                                                                                                                    'success', true,
+                                                                                                                                                                                                                                                                                                                                                        'service_id', p_service_id,
+                                                                                                                                                                                                                                                                                                                                                            'full_service_id', v_full_service_id,
+                                                                                                                                                                                                                                                                                                                                                                'message', 'Service upserted successfully'
+                                                                                                                                                                                                                                                                                                                                                                  );
+                                                                                                                                                                                                                                                                                                                                                                    
+                                                                                                                                                                                                                                                                                                                                                                      RETURN v_result;
+                                                                                                                                                                                                                                                                                                                                                                      END;
+                                                                                                                                                                                                                                                                                                                                                                      $$;
+
+
+ALTER FUNCTION public.upsert_full_service_with_subs(p_service_id text, p_service_name text, p_icon text, p_color text) OWNER TO postgres;
 
 --
 -- Name: apply_rls(jsonb, integer); Type: FUNCTION; Schema: realtime; Owner: supabase_admin
@@ -1690,16 +2048,18 @@ ALTER FUNCTION storage.enforce_bucket_name_length() OWNER TO supabase_storage_ad
 --
 
 CREATE FUNCTION storage.extension(name text) RETURNS text
-    LANGUAGE plpgsql
+    LANGUAGE plpgsql IMMUTABLE
     AS $$
 DECLARE
-_parts text[];
-_filename text;
+    _parts text[];
+    _filename text;
 BEGIN
-	select string_to_array(name, '/') into _parts;
-	select _parts[array_length(_parts,1)] into _filename;
-	-- @todo return the last part instead of 2
-	return reverse(split_part(reverse(_filename), '.', 1));
+    -- Split on "/" to get path segments
+    SELECT string_to_array(name, '/') INTO _parts;
+    -- Get the last path segment (the actual filename)
+    SELECT _parts[array_length(_parts, 1)] INTO _filename;
+    -- Extract extension: reverse, split on '.', then reverse again
+    RETURN reverse(split_part(reverse(_filename), '.', 1));
 END
 $$;
 
@@ -1729,13 +2089,15 @@ ALTER FUNCTION storage.filename(name text) OWNER TO supabase_storage_admin;
 --
 
 CREATE FUNCTION storage.foldername(name text) RETURNS text[]
-    LANGUAGE plpgsql
+    LANGUAGE plpgsql IMMUTABLE
     AS $$
 DECLARE
-_parts text[];
+    _parts text[];
 BEGIN
-	select string_to_array(name, '/') into _parts;
-	return _parts[1:array_length(_parts,1)-1];
+    -- Split on "/" to get path segments
+    SELECT string_to_array(name, '/') INTO _parts;
+    -- Return everything except the last segment
+    RETURN _parts[1 : array_length(_parts,1) - 1];
 END
 $$;
 
@@ -1764,11 +2126,11 @@ ALTER FUNCTION storage.get_common_prefix(p_key text, p_prefix text, p_delimiter 
 --
 
 CREATE FUNCTION storage.get_size_by_bucket() RETURNS TABLE(size bigint, bucket_id text)
-    LANGUAGE plpgsql
+    LANGUAGE plpgsql STABLE
     AS $$
 BEGIN
     return query
-        select sum((metadata->>'size')::int) as size, obj.bucket_id
+        select sum((metadata->>'size')::bigint)::bigint as size, obj.bucket_id
         from "storage".objects as obj
         group by obj.bucket_id;
 END
@@ -3220,6 +3582,19 @@ CREATE TABLE auth.webauthn_credentials (
 ALTER TABLE auth.webauthn_credentials OWNER TO supabase_auth_admin;
 
 --
+-- Name: app_settings; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.app_settings (
+    key text NOT NULL,
+    value text,
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+ALTER TABLE public.app_settings OWNER TO postgres;
+
+--
 -- Name: assistants; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -3480,6 +3855,23 @@ CREATE TABLE public.merchant_product_prices (
 ALTER TABLE public.merchant_product_prices OWNER TO postgres;
 
 --
+-- Name: merchant_sub_services; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.merchant_sub_services (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    merchant_id uuid,
+    sub_service_id uuid,
+    is_active boolean DEFAULT true,
+    show_title boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+ALTER TABLE public.merchant_sub_services OWNER TO postgres;
+
+--
 -- Name: merchants; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -3495,7 +3887,8 @@ CREATE TABLE public.merchants (
     is_active boolean DEFAULT true,
     image_url text,
     created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now()
+    updated_at timestamp with time zone DEFAULT now(),
+    has_driver boolean DEFAULT false
 );
 
 
@@ -3605,7 +3998,8 @@ CREATE TABLE public.orders (
     driver_assigned_at timestamp with time zone,
     delivery_started_at timestamp with time zone,
     is_guest boolean DEFAULT false,
-    guest_phone text
+    guest_phone text,
+    sub_service_id text
 );
 
 ALTER TABLE ONLY public.orders REPLICA IDENTITY FULL;
@@ -3658,6 +4052,25 @@ CREATE TABLE public.places (
 ALTER TABLE public.places OWNER TO postgres;
 
 --
+-- Name: product_categories; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.product_categories (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    service_id text,
+    name text NOT NULL,
+    image_url text,
+    icon text DEFAULT 'cube'::text,
+    sort_order integer DEFAULT 0,
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+ALTER TABLE public.product_categories OWNER TO postgres;
+
+--
 -- Name: product_variants; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -3696,7 +4109,8 @@ CREATE TABLE public.products (
     rejectionreason text,
     video_url text,
     merchant_type text,
-    service_name text
+    service_name text,
+    category_id uuid
 );
 
 
@@ -3752,11 +4166,30 @@ CREATE TABLE public.profiles (
     commercial_register text,
     tax_card text,
     image_approved boolean DEFAULT true,
-    admin_level text DEFAULT 'basic'::text
+    admin_level text DEFAULT 'basic'::text,
+    image_url_pending text,
+    documents jsonb DEFAULT '[]'::jsonb,
+    documents_approved boolean DEFAULT false,
+    region_id uuid
 );
 
 
 ALTER TABLE public.profiles OWNER TO postgres;
+
+--
+-- Name: regions; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.regions (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    name text NOT NULL,
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now()
+);
+
+
+ALTER TABLE public.regions OWNER TO postgres;
 
 --
 -- Name: rest2_items; Type: TABLE; Schema: public; Owner: postgres
@@ -3848,11 +4281,29 @@ ALTER SEQUENCE public.reviews_id_seq OWNED BY public.reviews.id;
 
 
 --
+-- Name: service_categories; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.service_categories (
+    id text NOT NULL,
+    name text NOT NULL,
+    icon text DEFAULT 'apps-outline'::text,
+    sort_order integer DEFAULT 0,
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    image_url text
+);
+
+
+ALTER TABLE public.service_categories OWNER TO postgres;
+
+--
 -- Name: service_fields; Type: TABLE; Schema: public; Owner: postgres
 --
 
 CREATE TABLE public.service_fields (
-    id uuid,
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
     service_id text NOT NULL,
     field_name text NOT NULL,
     field_label text NOT NULL,
@@ -3862,7 +4313,12 @@ CREATE TABLE public.service_fields (
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
     sub_service_name text,
-    config jsonb DEFAULT '{}'::jsonb
+    config jsonb DEFAULT '{}'::jsonb,
+    sub_service_id uuid,
+    field_options text[],
+    is_visible boolean DEFAULT true,
+    help_text text DEFAULT ''::text,
+    placeholder text DEFAULT ''::text
 );
 
 
@@ -3916,6 +4372,28 @@ CREATE TABLE public.service_items (
 ALTER TABLE public.service_items OWNER TO postgres;
 
 --
+-- Name: service_tracking_steps; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.service_tracking_steps (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    service_id text,
+    step_key text NOT NULL,
+    label text NOT NULL,
+    icon text DEFAULT 'time-outline'::text,
+    sort_order integer DEFAULT 0,
+    is_active boolean DEFAULT true,
+    created_at timestamp with time zone DEFAULT now(),
+    updated_at timestamp with time zone DEFAULT now(),
+    image_url text,
+    attachment_url text,
+    description text
+);
+
+
+ALTER TABLE public.service_tracking_steps OWNER TO postgres;
+
+--
 -- Name: services; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -3947,7 +4425,9 @@ CREATE TABLE public.services (
     items_type text DEFAULT 'products'::text,
     merchant_id uuid DEFAULT gen_random_uuid(),
     merchant_name text,
-    header_image text
+    header_image text,
+    full_service_id uuid,
+    tracking_icon_url text
 );
 
 
@@ -4005,7 +4485,8 @@ CREATE TABLE public.sub_services (
     is_active boolean DEFAULT true,
     created_at timestamp with time zone DEFAULT now(),
     image_url text,
-    show_title boolean DEFAULT true
+    show_title boolean DEFAULT true,
+    tracking_icon_url text
 );
 
 
@@ -4025,7 +4506,8 @@ CREATE TABLE public.template_products (
     is_approved boolean DEFAULT false,
     created_by uuid,
     created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now()
+    updated_at timestamp with time zone DEFAULT now(),
+    category_id uuid
 );
 
 
@@ -4735,6 +5217,35 @@ COPY auth.webauthn_credentials (id, user_id, credential_id, public_key, attestat
 
 
 --
+-- Data for Name: app_settings; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.app_settings (key, value, updated_at) FROM stdin;
+send_sound_url	https://ik.imagekit.io/vzuah6tku/Mp3/floraphonic-happy-pop-2-185287.mp3	2026-05-11 20:10:25.522+00
+regions_icon	https://ik.imagekit.io/vzuah6tku/regions/regions_icon_1778149667101.jpg	2026-05-07 10:27:53.06+00
+app_logo_url	https://ik.imagekit.io/vzuah6tku/app_settings/app_logo_1778312521312_EekBvZ598	2026-05-09 07:42:09.976+00
+splash_background_url	https://ik.imagekit.io/vzuah6tku/Png/1000315078.gif?updatedAt=1778311708048	2026-05-09 10:41:10.374+00
+splash_text	مدينتك في تطبيق واحد	2026-05-09 10:41:42.793+00
+splash_text_color	#F1F5F9	2026-05-09 10:41:43.016+00
+app_version	نسخه تجريبيه	2026-05-09 18:27:01.303+00
+tab1_label	طلب	2026-05-10 18:09:22.706+00
+tab1_icon	cart	2026-05-10 18:09:22.861+00
+tab1_image	https://ik.imagekit.io/vzuah6tku/tabs/tab_icon_1778436559725_INy0_LIcS	2026-05-10 18:09:23.038+00
+tab2_label	عروض	2026-05-10 18:15:41.706+00
+tab2_icon	pricetag	2026-05-10 18:15:41.976+00
+tab2_image	https://ik.imagekit.io/vzuah6tku/tabs/tab_icon_1778436937815_Wm_roRBFr	2026-05-10 18:15:42.175+00
+tab4_label	طلباتي	2026-05-10 18:15:56.844+00
+tab4_icon	list	2026-05-10 18:15:57.034+00
+tab4_image	https://ik.imagekit.io/vzuah6tku/tabs/tab_icon_1778436950797_yDqTGRcZ9	2026-05-10 18:15:57.2+00
+tab3_label	المتجر	2026-05-10 18:16:07.535+00
+tab3_icon	storefront	2026-05-10 18:16:07.78+00
+tab3_image	https://ik.imagekit.io/vzuah6tku/tabs/tab_icon_1778436963149_nk5B5m08q	2026-05-10 18:16:07.98+00
+notification_sound_url	https://ik.imagekit.io/vzuah6tku/Mp3/notification.mp3	2026-05-11 10:50:20.784+00
+customer_notification_sound_url	https://ik.imagekit.io/vzuah6tku/Mp3/ElevenLabs_Airy_chime_for_social_media_notification_alert,_bright_and_cheerful.mp3	2026-05-11 20:07:36.08+00
+\.
+
+
+--
 -- Data for Name: assistants; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
@@ -4761,8 +5272,8 @@ COPY public.dishes (id, restaurant_id, name, price, description, image_url, crea
 --
 
 COPY public.full_services (id, service_id, name, icon, color, is_active, created_at, updated_at, image_url) FROM stdin;
-9352bbce-8ae1-46e2-9964-2db4ce667326	thomascook	سياحة وسفر	briefcase	#8B5CF6	t	2026-04-30 07:31:09.186914+00	2026-05-01 09:27:04.626+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777560251186_5wqvCYGuh.jpg
 c7205659-f582-40f1-9bbb-76dcfb40a337	delivery	توصيل طلبات	bicycle	#10B981	t	2026-05-01 11:00:48.470722+00	2026-05-01 11:00:48.470722+00	\N
+9352bbce-8ae1-46e2-9964-2db4ce667326	travel	سياحة وسفر	briefcase	#8B5CF6	t	2026-04-30 07:31:09.186914+00	2026-05-03 04:31:14.62+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777560251186_5wqvCYGuh.jpg
 \.
 
 
@@ -4808,10 +5319,32 @@ COPY public.merchant_product_prices (id, merchant_id, template_product_id, price
 cd4b29f4-c7cf-41b9-8b08-c6d10d4cb5c8	0ff923e8-2d14-43e0-b9df-1e7265b9860f	9ebabb39-882b-43b6-8143-7a3448eb6340	55	t	2026-04-27 01:33:28.524138+00
 0aefd7ba-4bde-4a0c-a8fc-61b1c3e173a8	2853336e-f393-4c4d-9d95-b7a17d4e2fb9	9ebabb39-882b-43b6-8143-7a3448eb6340	55	t	2026-04-27 00:57:18.769566+00
 847964b1-5a2d-4810-aeba-49c17ef8483f	2853336e-f393-4c4d-9d95-b7a17d4e2fb9	8ecedb6f-2c64-4f66-8049-f9bf0869ae20	66	t	2026-04-28 00:26:56.019759+00
-6f7ad5cf-ce3c-4244-88ef-6012504e55f3	ee2126c2-d675-441b-bc19-c96196e3db6b	9ebabb39-882b-43b6-8143-7a3448eb6340	10	t	2026-04-28 00:42:59.551172+00
 0e2fefbf-b061-4f3a-8885-8139b698dcf0	d6d911dd-76c0-4962-bdae-ab54ef74f5a6	c7c9d5ea-c76b-41e3-b712-cacf108902a7	88	t	2026-04-28 00:56:23.216476+00
 74a114d8-1673-450d-8380-a878c38e94c6	ee2126c2-d675-441b-bc19-c96196e3db6b	c7c9d5ea-c76b-41e3-b712-cacf108902a7	666	t	2026-04-28 01:01:47.283398+00
 df9bbae9-028b-47e0-909e-bc090bc95cd4	ee2126c2-d675-441b-bc19-c96196e3db6b	e36d658f-214e-4cd2-b347-bd6e740d2535	60	t	2026-04-28 15:59:58.29226+00
+c8366a01-6e27-4107-b89c-9400cdc4b3ba	ee2126c2-d675-441b-bc19-c96196e3db6b	9831db67-cc85-49c9-9551-9c6a6cd96eeb	12	t	2026-05-03 19:42:58.60899+00
+6f7ad5cf-ce3c-4244-88ef-6012504e55f3	ee2126c2-d675-441b-bc19-c96196e3db6b	9ebabb39-882b-43b6-8143-7a3448eb6340	10	f	2026-04-28 00:42:59.551172+00
+eae067a8-148a-4179-b6e5-8671b81dedfb	ee2126c2-d675-441b-bc19-c96196e3db6b	ecce5f49-a763-439e-b5d5-9ed796efaa73	39	f	2026-05-03 19:43:52.638807+00
+ab91f60a-b0ab-4ca0-a79a-3d22b8c4cf31	ee2126c2-d675-441b-bc19-c96196e3db6b	86c53b48-edbf-41a7-8403-ef28b8c5b143	69	f	2026-05-03 19:46:50.003467+00
+79b3ca5c-4556-456b-9de7-8026e668eaa0	ee2126c2-d675-441b-bc19-c96196e3db6b	a8658cf2-5f32-4c55-b638-8c5c1bb94dae	55	f	2026-05-03 19:44:35.961093+00
+0917a8a6-b88f-4339-ae9b-bc68aed1df8b	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	77496c02-8a41-4d9d-a3f8-1c698a98d6cf	60	t	2026-05-05 11:01:20.098369+00
+1865f6a5-9be9-48e0-a370-7eae611a2d80	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	dffb938d-3b91-4cb3-bf87-c0f84fb43913	90	t	2026-05-05 14:57:28.267558+00
+ed6717fc-1e33-43ce-99a4-c5a34f9e8cd6	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	9ebabb39-882b-43b6-8143-7a3448eb6340	55	t	2026-05-05 14:57:16.693575+00
+804de246-4da9-4d8d-8b6e-73c9afb18889	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	0da1c6cc-6f6a-4e3a-932d-754448c1a99b	25	t	2026-05-05 14:58:28.623995+00
+02c3f3e7-2b2d-4e81-abb8-d9b194bd4794	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	aa64325d-d8cf-429d-b872-bf85ab43f150	150	t	2026-05-05 14:58:41.403107+00
+5e65fd86-3d5d-4f92-8736-b6b95d8622c3	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	9e7bac47-32bd-4987-a8ee-6d2a9275caff	150	f	2026-05-05 14:57:51.244065+00
+46202300-8a23-4886-95cf-834201917790	14c34717-0a25-4ed8-ad1b-df970d18b4dc	9ebabb39-882b-43b6-8143-7a3448eb6340	61	t	2026-05-12 14:01:46.444532+00
+7ac2f623-f0e8-4980-9c30-fa15725ad701	14c34717-0a25-4ed8-ad1b-df970d18b4dc	e976ea5d-b967-45e9-b4d1-f9bbe0493c24	60	t	2026-05-12 14:01:57.969639+00
+309675c0-9e55-4ebe-a234-c3f3643c2584	14c34717-0a25-4ed8-ad1b-df970d18b4dc	77496c02-8a41-4d9d-a3f8-1c698a98d6cf	90	t	2026-05-12 14:02:15.195003+00
+\.
+
+
+--
+-- Data for Name: merchant_sub_services; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.merchant_sub_services (id, merchant_id, sub_service_id, is_active, show_title, created_at, updated_at) FROM stdin;
+9500fcb5-8e57-40c5-ba8f-00edc225f036	ddf6af56-4979-46a5-a977-f01ce6ebaeec	20956352-1809-4e50-9a04-577781242eae	t	t	2026-05-05 14:56:00.239722+00	2026-05-05 14:56:04.713+00
 \.
 
 
@@ -4819,17 +5352,14 @@ df9bbae9-028b-47e0-909e-bc090bc95cd4	ee2126c2-d675-441b-bc19-c96196e3db6b	e36d65
 -- Data for Name: merchants; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.merchants (id, user_id, name, phone, service_type, place_name, address, delivery_fee, is_active, image_url, created_at, updated_at) FROM stdin;
-b477d42c-a50c-4422-9afd-cf7d7228d06d	2783b4b5-af7d-45ec-bd8e-44489e453f18	نوح	\N	dryclean	\N	\N	10	t	\N	2026-04-25 16:48:25.516798+00	2026-04-25 16:48:25.516798+00
-a90893ad-6e4a-452b-8bc8-ca518fd49320	178224b5-f644-444f-b7d2-93119e0a5877	سعد	\N	dryclean	\N	\N	10	t	\N	2026-04-25 16:48:25.516798+00	2026-04-25 16:48:25.516798+00
-bbc5016a-00b6-4636-97c3-0ab630d65b63	f63f6bb7-b28f-48b2-a969-4403eec07082	كرم	010222222222	pharmacy	كرم	\N	10	t	\N	2026-04-26 01:20:22.18222+00	2026-04-26 01:20:22.18222+00
-2853336e-f393-4c4d-9d95-b7a17d4e2fb9	29fd1cb7-20c4-48ee-aa58-7bf77f867c9f	سوبر ماركت صن شاين	01044444444	supermarket	سوبر ماركت صن شاين	\N	10	t	\N	2026-04-26 01:20:22.18222+00	2026-04-26 01:20:22.18222+00
-9468d439-c279-422d-81f6-2f02a3fe0dfb	03764db8-1f61-42b6-ba26-58253e9b7e78	سامح	01011111111	pharmacy	سامح	\N	10	t	\N	2026-04-26 01:20:22.18222+00	2026-04-26 01:20:22.18222+00
-c264e47a-f655-4db5-af8d-f6b12058118d	1f75f439-590c-41b0-ac36-f928f6b6f17d	شيف	01055555555	home_chef	شيف	\N	10	t	\N	2026-04-26 11:20:53.256+00	2026-04-26 11:20:53.256+00
-ee2126c2-d675-441b-bc19-c96196e3db6b	d6d911dd-76c0-4962-bdae-ab54ef74f5a6	ابو سعيد سوبر ماركت 	01088888888	supermarket	ابو سعيد سوبر ماركت 	\N	10	t	https://ik.imagekit.io/vzuah6tku/zayedid/users/ابو_سعيد_سوبر_ماركت/profile/profile_1777391819065_QktPREKRa.jpg	2026-04-28 00:42:28.919+00	2026-04-28 00:42:28.919+00
-e31076d2-5a57-455d-b5ac-d25833313744	cc1f8417-de12-4776-ba72-8cbb4a222c21	First Travel	01099999999	travel2	First Travel	\N	10	t	\N	2026-04-30 05:06:32.229024+00	2026-05-01 10:02:51.582634+00
-14837ed4-2c89-4833-affb-f2fd753208b1	c12add9e-6d38-44fd-b558-adc3e03918b6	Thomas Cook Tours	01099999999	thomascook		\N	10	t	https://ik.imagekit.io/vzuah6tku/zayedid/users/thomascook/misc/merchant_c12add9e-6d38-44fd-b558-adc3e03918b6_1777559332339_OkZgoFOOy.jpg	2026-04-30 14:03:24.350358+00	2026-05-01 10:02:51.582634+00
-a9299c06-f278-4555-b488-abf3489c5be0	a9299c06-f278-4555-b488-abf3489c5be0	توصيل	01188888888	delivery		\N	45	t	https://ik.imagekit.io/vzuah6tku/zayedid/users/توصيل/profile/profile_1777628784817_qNg8US-EH.jpg	2026-05-01 11:45:01.985667+00	2026-05-01 11:45:01.985667+00
+COPY public.merchants (id, user_id, name, phone, service_type, place_name, address, delivery_fee, is_active, image_url, created_at, updated_at, has_driver) FROM stdin;
+cb273744-cf70-486d-b6e1-8c1c4932b140	cb273744-cf70-486d-b6e1-8c1c4932b140	مكوجي	01099999999	dryclean	\N	\N	10	t	\N	2026-05-07 15:20:21.798484+00	2026-05-07 16:01:08.449157+00	f
+af895294-c6d2-408b-9fbb-4f84b04c29b6	af895294-c6d2-408b-9fbb-4f84b04c29b6	مكوجي مهندسين	01299999999	dryclean		\N	30	t		2026-05-07 15:23:42.114872+00	2026-05-07 17:08:27.168385+00	f
+42e2ac06-2524-42f2-9215-98ea3b4f3f56	42e2ac06-2524-42f2-9215-98ea3b4f3f56	الشيف حسن	01022222222	home_chef		\N	50	t	https://ik.imagekit.io/vzuah6tku/zayedid/users/الشيف_حسن/misc/merchant_42e2ac06-2524-42f2-9215-98ea3b4f3f56_1778074951717_G7nz74zQl.jpg	2026-05-06 13:41:07.650906+00	2026-05-09 19:06:15.087507+00	f
+ddf6af56-4979-46a5-a977-f01ce6ebaeec	ddf6af56-4979-46a5-a977-f01ce6ebaeec	Thomas Cook Tours	01000000001	travel		\N	10	t	https://ik.imagekit.io/vzuah6tku/zayedid/users/thomas_cook_tours/profile/profile_1778014659036_yMNxJaxtH.jpg	2026-05-05 08:34:22.695468+00	2026-05-07 07:28:20.107397+00	f
+959f739f-5ae3-4811-a1ab-434012ff11e9	959f739f-5ae3-4811-a1ab-434012ff11e9	Joe	01200000000	home_chef	\N	\N	10	t	\N	2026-05-09 19:13:31.299151+00	2026-05-10 04:52:35.107618+00	f
+cd392e2f-7c36-41e6-b98f-e81ffc3dc013	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	صن شاين	01011111111	supermarket		\N	50	t	https://ik.imagekit.io/vzuah6tku/zayedid/users/صن_شاين/misc/merchant_cd392e2f-7c36-41e6-b98f-e81ffc3dc013_1778001793590_NTF-0X7C8.jpg	2026-05-05 11:00:37.74374+00	2026-05-11 17:01:12.339538+00	t
+14c34717-0a25-4ed8-ad1b-df970d18b4dc	14c34717-0a25-4ed8-ad1b-df970d18b4dc	الهواري	01022222222	supermarket	\N	\N	10	t	\N	2026-05-12 14:01:09.558576+00	2026-05-12 14:01:09.558576+00	f
 \.
 
 
@@ -4843,7 +5373,6 @@ COPY public.offers (id, title, description, image_url, is_approved, created_at, 
 1	خصم 20% على خدمة التنظيف	هذا العرض ساري حتى يوم الخميس ١٢ مايو	https://ik.imagekit.io/vzuah6tku/zayedid/misc/offer_1777217507854_1R_TEt8D1.jpg	\N	2026-04-26 14:23:28.936+00	2026-04-26 16:50:13.662+00	c264e47a-f655-4db5-af8d-f6b12058118d	شيف	home_chef	20	100	80	\N	\N	approved		t	{}
 9	خصم			\N	2026-04-28 16:04:55.085+00	2026-04-28 16:05:30.496+00	ee2126c2-d675-441b-bc19-c96196e3db6b	ابو سعيد سوبر ماركت 	supermarket	\N	\N	\N	\N	\N	approved		t	{}
 11	عرض خاص على منتجات التجميل		https://ik.imagekit.io/vzuah6tku/zayedid/misc/offer_1777483890382_tVFHB4EkL.jpg	\N	2026-04-29 17:31:33.269+00	2026-04-29 17:35:53.265+00	bbc5016a-00b6-4636-97c3-0ab630d65b63	كرم	pharmacy	30	210	140	\N	\N	approved		t	{}
-10	عرض خاص على منتجات سوبر ماركت صن شاين		https://ik.imagekit.io/vzuah6tku/zayedid/misc/offer_1777483805554_Y3kJR-Z6F.jpg	\N	2026-04-29 17:30:16.072+00	2026-04-29 19:34:34.488+00	bbc5016a-00b6-4636-97c3-0ab630d65b63	كرم	pharmacy	20	50	150	\N	\N	approved		t	{}
 4	خصم ٣٠ % على كل البلاي ستيشن	العرض ساري لمدة ٣ ايام	https://ik.imagekit.io/vzuah6tku/zayedid/misc/offer_1777229196815_1AtCMujB6.jpg	\N	2026-04-26 18:46:39.833+00	2026-04-29 19:35:30.851+00	2853336e-f393-4c4d-9d95-b7a17d4e2fb9	سوبر ماركت صن شاين	supermarket	20	100	80	\N	\N	approved		t	{}
 \.
 
@@ -4852,111 +5381,167 @@ COPY public.offers (id, title, description, image_url, is_approved, created_at, 
 -- Data for Name: orders; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.orders (id, user_id, merchant_id, driver_id, status, total_price, delivery_fee, address_text, location_lat, location_lng, payment_method, created_at, customer_name, customer_phone, merchant_name, merchant_phone, delivery_notes, order_notes, items, "customerPhone", "serviceName", "serviceType", "totalPrice", description, notes, image_urls, order_details, pickup_fee, has_pickup, pickup_address, driver_name, driver_phone, merchant_place, final_total, subtotal, voice_url, raw_text, updated_at, accepted_at, customer_address, service_name, service_type, delivered_at, cancelled_at, cancellation_reason, price_set_at, driver_assigned_at, delivery_started_at, is_guest, guest_phone) FROM stdin;
-867b20b3-d707-455c-baca-0f8d1e63f46c	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 17:54:08.466+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 18:05:55.342336+00	2026-04-25 18:05:54.73+00	Dd	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-712d4279-bc94-4ae2-83e1-dbf4f284a58f	\N	4ac267df-e1e0-47b6-b2ce-f31b20e442a6	\N	pending	15	0	\N	\N	\N	cash_on_delivery	2026-04-25 12:58:47.27+00	Sherif	01033833119	نوح	\N	\N	\N	["بنطلون (كي وتنظيف) x1 = 15ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 12:58:47.27+00	\N	O	مكوجي	laundry	\N	\N	\N	\N	\N	\N	f	\N
-c046018b-332b-4d86-b792-b15fb6688d47	\N	4ac267df-e1e0-47b6-b2ce-f31b20e442a6	\N	pending	10	0	\N	\N	\N	cash_on_delivery	2026-04-25 13:11:21.547+00	Sherif	01033833119	نوح	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 13:11:21.547+00	\N	O	مكوجي	laundry	\N	\N	\N	\N	\N	\N	f	\N
-36870a03-06d6-43e3-9b7a-993e74b217e2	\N	4ac267df-e1e0-47b6-b2ce-f31b20e442a6	\N	pending	10	0	\N	\N	\N	cash_on_delivery	2026-04-25 13:53:29.347+00	Sherif	01033833119	نوح	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 13:53:29.347+00	\N	O	مكوجي	laundry	\N	\N	\N	\N	\N	\N	f	\N
-9c8bf858-0618-46ab-bb1f-418adf0105d0	\N	4ac267df-e1e0-47b6-b2ce-f31b20e442a6	\N	pending	10	0	\N	\N	\N	cash_on_delivery	2026-04-25 14:00:14.617+00	Sherif	01033833119	نوح	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 14:00:14.617+00	\N	O	مكوجي	laundry	\N	\N	\N	\N	\N	\N	f	\N
-f0665b6d-e38f-42c5-8dfa-484b75237338	\N	\N	\N	pending	10	0	\N	\N	\N	cash_on_delivery	2026-04-25 14:12:17.183+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f		\N	\N	\N	\N	\N	\N	\N	2026-04-25 14:12:17.183+00	\N	O	مكوجي	laundry	\N	\N	\N	\N	\N	\N	f	\N
-6fe2a584-600d-49be-a1d1-d8e6b257d879	\N	\N	\N	pending	15	0	\N	\N	\N	cash_on_delivery	2026-04-25 14:12:22.691+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي وتنظيف) x1 = 15ج"]	\N	\N	\N	\N			[]	{}	0	f		\N	\N	\N	\N	\N	\N	\N	2026-04-25 14:12:22.691+00	\N	O	مكوجي	laundry	\N	\N	\N	\N	\N	\N	f	\N
-13d6e4f0-713e-487f-b0c3-aeca7ec029e2	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	delivered	185	35	\N	\N	\N	\N	2026-04-25 18:10:12.823+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	220	\N	\N	\N	2026-04-25 18:11:08.183931+00	2026-04-25 18:10:47.623+00	Hhhh	مكوجي	dryclean	2026-04-25 18:11:08.045	\N	\N	\N	\N	2026-04-25 18:11:05.037+00	f	\N
-0b074260-7406-468a-a9cf-6d74473f890a	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	20	0	\N	\N	\N	\N	2026-04-25 18:47:35.736+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي وتنظيف) x1 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:09.156876+00	2026-04-25 22:08:09.038+00	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-4f6b9478-8500-4f35-855f-799af0ed10d4	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 18:43:34.912+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:13.858207+00	2026-04-25 22:08:13.73+00	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-142ab96f-09c3-4df1-924d-4fe5f76bae08	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 18:43:24.9+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:15.504058+00	2026-04-25 22:08:15.385+00	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-707157cf-d49a-4d2a-a80e-79b763a58193	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	20	0	\N	\N	\N	\N	2026-04-25 18:36:01.429+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x2 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:17.015695+00	2026-04-25 22:08:16.897+00	I	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-61fa6438-fd8c-44e3-b1a7-80abd4508b5b	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 18:29:24.17+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:22.520802+00	2026-04-25 22:08:22.398+00	I	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-576394ae-6610-4817-bf94-cfe6e382a0c9	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 18:21:53.145+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:24.172635+00	2026-04-25 22:08:24.054+00	Hhhh	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-16a95eb4-b93b-4489-be81-41fef9e8b079	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	30	0	\N	\N	\N	\N	2026-04-25 18:05:10.578+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x3 = 30ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:27.200102+00	2026-04-25 22:08:27.078+00	Hhhh	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-e7db79ed-ee54-4179-a458-5a633aa916de	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	30	0	\N	\N	\N	\N	2026-04-25 17:57:55.779+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج", "بنطلون (كي وتنظيف) x1 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:30.463295+00	2026-04-25 22:08:30.343+00	Dd	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-45756168-31b2-4894-b30c-2670bf0f0c1e	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 17:54:18.227+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:32.23669+00	2026-04-25 22:08:32.12+00	Dd	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-9162113f-68c5-4134-a435-21baeaab9150	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	70	0	\N	\N	\N	\N	2026-04-25 17:38:52.595+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x7 = 70ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:33.966194+00	2026-04-25 22:08:33.82+00	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-38d82527-2a25-4875-85c7-31dc5fac2870	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	130	0	\N	\N	\N	\N	2026-04-25 17:38:41.128+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج", "بنطلون (كي وتنظيف) x6 = 120ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:35.939634+00	2026-04-25 22:08:35.812+00	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-af2db80d-ec03-461e-a7c5-51fc0e9a2d0d	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 17:34:44.88+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:37.552427+00	2026-04-25 22:08:37.433+00	O	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-1e972c3c-c850-4935-8977-75c6e3ce87ca	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	70	0	\N	\N	\N	\N	2026-04-25 16:45:44.724+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x3 = 30ج", "بنطلون (كي وتنظيف) x2 = 40ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:40.829181+00	2026-04-25 22:08:40.709+00	O	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-d873eb9a-0020-47fd-b094-662407efb346	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	30	0	\N	\N	\N	\N	2026-04-25 16:43:20.363+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج", "بنطلون (كي وتنظيف) x1 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:42.487618+00	2026-04-25 22:08:42.367+00	O	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-2d350f9c-d0b9-4877-af94-1b9b30a8f0f3	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 16:43:10.829+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:44.108364+00	2026-04-25 22:08:43.989+00	O	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-a1a6f69a-b8d2-4621-ab97-4645115544a0	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	50	0	\N	\N	\N	\N	2026-04-25 16:31:07.147+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج", "بنطلون (كي وتنظيف) x2 = 40ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:47.35939+00	2026-04-25 22:08:47.245+00	O	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-1020fc4f-8685-44d4-a7c2-cc8250900448	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 16:29:09.165+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:49.054253+00	2026-04-25 22:08:48.935+00	O	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-1ffa4459-f392-4c31-9d7e-141c9d951d59	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	cash_on_delivery	2026-04-25 16:24:08.056+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f		\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:52.452777+00	2026-04-25 22:08:52.293+00	O	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-46d074b7-1670-4e2b-ba8f-438567d37be9	\N	\N	\N	cancelled	10	0	\N	\N	\N	cash_on_delivery	2026-04-25 14:46:17.586+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f		\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:09:00.591548+00	\N	O	مكوجي	dryclean	\N	\N	شكرا	\N	\N	\N	f	\N
-f5fd8280-e34d-46e3-bfb1-71ec11456384	\N	9468d439-c279-422d-81f6-2f02a3fe0dfb	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-25 18:29:43.294+00	Sherif	01033833119	سامح	01011111111	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 20:28:12.248042+00	2026-04-27 20:28:12.075+00	I	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-dc38a5e1-42b1-4872-96ea-fedfcb924e19	\N	9468d439-c279-422d-81f6-2f02a3fe0dfb	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-25 17:57:46.032+00	Sherif	01033833119	سامح	01011111111	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 20:28:13.92385+00	2026-04-27 20:28:13.747+00	Dd	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-c1a5cacd-3293-4517-a6aa-e52dfc75fa11	\N	9468d439-c279-422d-81f6-2f02a3fe0dfb	\N	accepted	\N	0	\N	\N	\N	cash_on_delivery	2026-04-25 13:53:40.191+00	Sherif	01033833119	سامح	01011111111	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 20:28:16.588842+00	2026-04-27 20:28:16.379+00	O	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-44ac3eb8-5b7e-44dc-991a-24f9b0e19df6	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 22:03:59.012+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:07:48.760022+00	2026-04-25 22:07:48.617+00	Ppp	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-ae69de74-8383-462f-b9d2-e6a059debd4c	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 20:50:44.841+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:07:52.779631+00	2026-04-25 22:07:52.66+00	Hdb	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-9068d814-50e9-4514-adc9-fc2eba59321c	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 20:02:06.449+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:07:54.973085+00	2026-04-25 22:07:54.849+00	Hdb	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-cade3f6f-cc56-4eed-8651-10985f68a9a4	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 20:01:55.776+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:07:57.093058+00	2026-04-25 22:07:56.975+00	Hdb	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-3ab1ba4e-5385-403f-b1f6-d45052870902	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 19:54:10.842+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:07:59.325688+00	2026-04-25 22:07:59.208+00	Hdb	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-f2a8e582-6221-492e-b88e-81a104563bc7	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 19:52:51.182+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:01.574176+00	2026-04-25 22:08:01.446+00	Hdb	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-6f58cf8a-7ddc-4724-9d5c-954252df87e5	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	20	0	\N	\N	\N	\N	2026-04-25 18:57:03.151+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي وتنظيف) x1 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:03.867984+00	2026-04-25 22:08:03.662+00	Jjd	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-e9460244-b51e-4a84-a117-9fb2686d758d	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	30	0	\N	\N	\N	\N	2026-04-25 18:56:56.063+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج", "بنطلون (كي وتنظيف) x1 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:06.642673+00	2026-04-25 22:08:06.521+00	Jjd	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-d6b73805-e8df-4d2d-8779-8885e2f4aae2	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 18:47:25.517+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:11.382198+00	2026-04-25 22:08:11.264+00	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-c81f285c-6e52-4771-a822-1543991a57bf	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	20	0	\N	\N	\N	\N	2026-04-25 18:29:32.843+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي وتنظيف) x1 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:20.82051+00	2026-04-25 22:08:20.687+00	I	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-86a22bb1-e503-4284-a2e8-a0fe89324a31	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	30	0	\N	\N	\N	\N	2026-04-25 18:05:00.799+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج", "بنطلون (كي وتنظيف) x1 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:28.831721+00	2026-04-25 22:08:28.711+00	Hhhh	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-96c052ff-791f-45fc-aac9-dd938cc9fc41	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 17:22:00.027+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:39.192657+00	2026-04-25 22:08:39.078+00	O	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-df6268aa-38c8-43c4-ada2-72d47441fb8b	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 16:33:04.905+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:45.745821+00	2026-04-25 22:08:45.623+00	O	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-bab69ad3-bfac-4c17-955a-06cbeeca3aad	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	30	0	\N	\N	\N	cash_on_delivery	2026-04-25 16:24:25.239+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج", "بنطلون (كي وتنظيف) x1 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f		\N	\N	\N	\N	\N	\N	\N	2026-04-25 22:08:50.668672+00	2026-04-25 22:08:50.533+00	O	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-e14390f4-16c0-4a7a-afa0-f67af1a46736	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	delivered	30	0	\N	\N	\N	\N	2026-04-25 23:32:23.91+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج", "بنطلون (كي وتنظيف) x1 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	30	\N	\N	\N	2026-04-27 18:07:01.279511+00	2026-04-25 23:45:52.564+00	Ppp	مكوجي	dryclean	2026-04-27 18:07:01.078	\N	\N	\N	\N	2026-04-27 18:06:58.643+00	f	\N
-9da0d40b-2fc6-42ed-a701-fd4542c61a8b	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	30	0	\N	\N	\N	\N	2026-04-25 23:32:11.088+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج", "بنطلون (كي وتنظيف) x1 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 23:45:54.747711+00	2026-04-25 23:45:54.648+00	Ppp	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-fcaf96b6-c135-44bd-a7e4-6136b47709af	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	30	0	\N	\N	\N	\N	2026-04-25 23:31:45.305+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج", "بنطلون (كي وتنظيف) x1 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 23:45:56.705266+00	2026-04-25 23:45:56.594+00	Ppp	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-752d9df3-2ebe-46e2-a84b-dc7b367bc220	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 23:31:26.993+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 23:46:00.472638+00	2026-04-25 23:46:00.362+00	Ppp	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-9fb22250-3c91-48be-aa76-e404cf73b502	\N	9468d439-c279-422d-81f6-2f02a3fe0dfb	\N	delivered	20	20	\N	\N	\N	\N	2026-04-25 23:31:58.963+00	Sherif	01033833119	سامح	01011111111	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	40	\N	\N	\N	2026-04-27 20:28:33.655734+00	2026-04-27 01:32:46.183+00	Ppp	صيدلية	pharmacy	2026-04-27 20:28:33.497	\N	\N	\N	\N	2026-04-27 20:28:30.7+00	f	\N
-fcdefcd5-41a4-4d44-a736-9b4b1863f6bf	\N	a90893ad-6e4a-452b-8bc8-ca518fd49320	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 23:54:49.92+00	Sherif	01033833119	سعد	01211223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 23:55:19.080536+00	2026-04-25 23:55:18.941+00	Ppp	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-fa80c8b8-d1ba-48fa-9c17-3c7c68722ef1	\N	a90893ad-6e4a-452b-8bc8-ca518fd49320	\N	accepted	10	0	\N	\N	\N	\N	2026-04-25 23:54:40.759+00	Sherif	01033833119	سعد	01211223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-25 23:55:21.90822+00	2026-04-25 23:55:21.796+00	Ppp	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-cf2bcef4-5d57-4d3e-a45d-2867bbe540b6	3cfaff3b-02fa-4954-b94f-2549ff58715e	2853336e-f393-4c4d-9d95-b7a17d4e2fb9	\N	accepted	54	10	\N	\N	\N	cash_on_delivery	2026-04-26 01:15:48.586+00	Sherif	01033833119	سوبر ماركت صن شاين	01044444444	\N	\N	["لبن جهينة ١ لتر x1 = 54 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-26 01:24:33.579759+00	2026-04-26 01:24:33.439+00	Ppp	سوبر ماركت صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N
-665bbed0-eef2-418a-b909-765cae0b0e9b	\N	\N	\N	pending	55	30	\N	\N	\N	cash	2026-04-26 21:27:05.765+00	Sherif	01033833119	\N	\N	\N	\N	["منتج جديد x1 = 55ج"]	\N	\N	\N	\N	\N		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-26 21:27:06.153341+00	\N	Gannah	متجر Zid	eshop	\N	\N	\N	\N	\N	\N	t	01033833119
-584ab6ea-1c31-4bde-a4e6-f8babb885c21	3cfaff3b-02fa-4954-b94f-2549ff58715e	\N	\N	pending	165	30	\N	\N	\N	cash	2026-04-26 22:35:42.833+00	Sherif	01033833119	\N	\N	\N	\N	["مخدة x1 = 165ج"]	\N	\N	\N	\N	\N		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-26 22:35:43.020286+00	\N	جنه ٢	متجر Zid	eshop	\N	\N	\N	\N	\N	\N	f	\N
-54d0ec7d-f198-443b-89bd-05483ec6cb02	3cfaff3b-02fa-4954-b94f-2549ff58715e	\N	\N	pending	220	0	\N	\N	\N	cash	2026-04-26 22:47:17.89+00	Sherif	01033833119	\N	\N	\N	\N	["مخدة x1 = 165ج", "منتج جديد x1 = 55ج"]	\N	\N	\N	\N	\N		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-26 22:47:18.089961+00	\N	جنه ٢	متجر Zid	eshop	\N	\N	\N	\N	\N	\N	f	\N
-40e7684e-e0ab-48b8-bef2-9c7edf24535c	\N	9468d439-c279-422d-81f6-2f02a3fe0dfb	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-25 20:50:36.494+00	Sherif	01033833119	سامح	01011111111	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 20:28:06.088627+00	2026-04-27 20:28:05.84+00	Hdb	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-d46a539d-59ad-4c30-b7b3-5e854aa497ab	\N	b477d42c-a50c-4422-9afd-cf7d7228d06d	\N	delivered	10	10	\N	\N	\N	\N	2026-04-25 23:53:13.43+00	Sherif	01033833119	نوح	01011223344	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	20	\N	\N	\N	2026-04-27 18:06:49.902809+00	2026-04-25 23:53:41.089+00	Ppp	مكوجي	dryclean	2026-04-27 18:06:49.711	\N	\N	\N	\N	2026-04-27 18:06:46.899+00	f	\N
-f41b334a-7862-40e4-8d61-1bf972b27074	\N	9468d439-c279-422d-81f6-2f02a3fe0dfb	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-25 20:40:23.83+00	Sherif	01033833119	سامح	01011111111	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 20:28:08.463353+00	2026-04-27 20:28:08.28+00	Hdb	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-3726cdae-35e8-413f-9726-86cf3a52cf01	\N	9468d439-c279-422d-81f6-2f02a3fe0dfb	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-25 20:29:13.675+00	Sherif	01033833119	سامح	01011111111	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 20:28:10.330079+00	2026-04-27 20:28:10.147+00	Hdb	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-8eb76fca-a8b9-49e1-a872-0bd9a286337d	\N	\N	\N	pending	220	0	\N	\N	\N	cash	2026-04-26 22:57:45.115+00	S	0	\N	\N	\N	\N	["مخدة x1 = 165ج", "منتج جديد x1 = 55ج"]	\N	\N	\N	\N	\N		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-26 22:57:46.242444+00	\N	J	متجر Zid	eshop	\N	\N	\N	\N	\N	\N	t	0
-529fd034-480a-4fc4-9588-77e27c7affb3	3cfaff3b-02fa-4954-b94f-2549ff58715e	ee2126c2-d675-441b-bc19-c96196e3db6b	\N	accepted	730	10	\N	\N	\N	cash_on_delivery	2026-04-28 21:51:17.099+00	Sherif	01033833119	ابو سعيد سوبر ماركت 	01088888888	\N	\N	["لبن خالي الدسم جهينة 1 لتر x1 = 666 ج", "لبن المراعي كامل الدسم 1 لتر x1 = 10 ج", "Hh x1 = 54 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-28 21:51:49.999853+00	2026-04-28 21:51:49.874+00	G	ابو سعيد سوبر ماركت 	supermarket	\N	\N	\N	\N	\N	\N	f	\N
-b56597d9-7232-4a3b-9aa8-c1be9e662971	d6d911dd-76c0-4962-bdae-ab54ef74f5a6	ee2126c2-d675-441b-bc19-c96196e3db6b	\N	accepted	60	10	\N	\N	\N	cash_on_delivery	2026-04-28 16:00:28.329+00	ابو سعيد سوبر ماركت	01088888888	ابو سعيد سوبر ماركت 	01088888888	\N	\N	["مربى فراولة x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-28 16:02:53.778545+00	2026-04-28 16:02:53.644+00	جنه 	ابو سعيد سوبر ماركت 	supermarket	\N	\N	\N	\N	\N	\N	f	\N
-1a699951-dfbd-447b-9891-16f6fc783968	\N	2853336e-f393-4c4d-9d95-b7a17d4e2fb9	\N	on_the_way	176	35	\N	\N	\N	cash_on_delivery	2026-04-28 00:28:47.969+00	تا	010987987987	سوبر ماركت صن شاين	01044444444	\N	\N	["جبنة فيتا x1 = 66 ج", "لبن جهينة كامل الدسم 1 لتر x1 = 55 ج", "لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	211	\N	\N	\N	2026-04-28 00:31:30.866345+00	2026-04-28 00:31:08.61+00	H	سوبر ماركت صن شاين	supermarket	\N	\N	\N	\N	\N	2026-04-28 00:31:30.731+00	f	\N
-56d20a29-2cd0-4296-932f-8ef4da38c9bd	3cfaff3b-02fa-4954-b94f-2549ff58715e	ee2126c2-d675-441b-bc19-c96196e3db6b	\N	delivered	64	35	\N	\N	\N	cash_on_delivery	2026-04-28 16:00:59.336+00	Sherif	01033833119	ابو سعيد سوبر ماركت 	01088888888	\N	\N	["Hh x1 = 54 ج", "لبن المراعي كامل الدسم 1 لتر x1 = 10 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	99	\N	\N	\N	2026-04-28 16:03:30.007677+00	2026-04-28 16:02:49.035+00	جنه 	ابو سعيد سوبر ماركت 	supermarket	2026-04-28 16:03:29.889	\N	\N	\N	\N	2026-04-28 16:03:27.36+00	f	\N
-110b6bd3-99a7-483d-95ac-00ab8fc51c54	3cfaff3b-02fa-4954-b94f-2549ff58715e	\N	\N	accepted	165	30	\N	\N	\N	cash	2026-04-26 23:18:55.531+00	Sherif	01033833119	\N	\N	\N	\N	["مخدة x1 = 165ج"]	\N	\N	\N	\N	\N		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-26 23:46:06.885876+00	\N	H	متجر Zid	eshop	\N	\N	\N	\N	\N	\N	f	\N
-5903e953-9c65-48d0-8a31-7f1b4c8a4baf	3cfaff3b-02fa-4954-b94f-2549ff58715e	\N	\N	pending	165	30	\N	\N	\N	cash	2026-04-27 23:46:53.072+00	Sherif	01033833119	\N	\N	\N	\N	["مخدة x1 = 165ج"]	\N	\N	\N	\N	\N		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 23:46:53.277489+00	\N	B	متجر Zid	eshop	\N	\N	\N	\N	\N	\N	f	\N
-915cfb0f-3aee-4232-ab3f-b002b0e16b3e	3cfaff3b-02fa-4954-b94f-2549ff58715e	\N	\N	pending	55	30	\N	\N	\N	cash	2026-04-27 23:47:03.993+00	Sherif	01033833119	\N	\N	\N	\N	["منتج جديد x1 = 55ج"]	\N	\N	\N	\N	\N		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 23:47:04.207769+00	\N	B	متجر Zid	eshop	\N	\N	\N	\N	\N	\N	f	\N
-869eaa60-6496-4665-a58e-018ac35dad2d	3cfaff3b-02fa-4954-b94f-2549ff58715e	\N	\N	pending	99	30	\N	\N	\N	cash	2026-04-27 23:47:15.629+00	Sherif	01033833119	\N	\N	\N	\N	["منتج تجريبي x1 = 99ج"]	\N	\N	\N	\N	\N		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 23:47:15.8402+00	\N	B	متجر Zid	eshop	\N	\N	\N	\N	\N	\N	f	\N
-f177bf47-a672-4c61-ad89-bfcb26d872e8	\N	\N	\N	pending	10	0	\N	\N	\N	\N	2026-04-27 23:47:34.231+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 23:47:34.231+00	\N	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-dd40af74-504a-4777-92c7-62561f0a6aa6	\N	\N	\N	pending	20	0	\N	\N	\N	\N	2026-04-27 23:47:44.8+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي وتنظيف) x1 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 23:47:44.8+00	\N	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-0b59e74e-bf2b-4adc-9657-79c3a866338e	3cfaff3b-02fa-4954-b94f-2549ff58715e	\N	\N	preparing	165	30	\N	\N	\N	cash	2026-04-27 23:49:13.84+00	Sherif	01033833119	\N	\N	\N	\N	["مخدة x1 = 165ج"]	\N	\N	\N	\N	\N		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 23:49:55.491852+00	\N	N	متجر Zid	eshop	\N	\N	\N	\N	\N	\N	f	\N
-942d81cd-4cdf-4eb2-b38b-671187805eda	3cfaff3b-02fa-4954-b94f-2549ff58715e	\N	\N	pending	165	30	\N	\N	\N	cash	2026-04-27 23:50:30.758+00	Sherif	01033833119	\N	\N	\N	\N	["مخدة x1 = 165ج"]	\N	\N	\N	\N	\N		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 23:50:30.939083+00	\N	Nm	متجر Zid	eshop	\N	\N	\N	\N	\N	\N	f	\N
-7b3f8b0b-173a-496b-bdd7-2b403c9085c1	\N	\N	\N	pending	10	0	\N	\N	\N	\N	2026-04-27 23:59:19.301+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 23:59:19.301+00	\N	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-a39e88a8-0fe5-4bbb-a7b0-3300a3403d4b	\N	\N	\N	pending	10	0	\N	\N	\N	\N	2026-04-27 23:59:29.911+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-27 23:59:29.911+00	\N	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-24ec1c02-51cd-476a-a2ab-3de767fb94ed	\N	\N	\N	pending	10	0	\N	\N	\N	\N	2026-04-28 00:04:04.915+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-28 00:04:04.915+00	\N	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-d0873402-4bb4-4461-b042-8bd91719ee0b	\N	\N	\N	pending	10	0	\N	\N	\N	\N	2026-04-28 00:10:55.593+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-28 00:10:55.593+00	\N	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-655116cc-8860-4368-80b8-55cd4dcc0904	\N	\N	\N	pending	10	0	\N	\N	\N	\N	2026-04-28 00:11:07.47+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-28 00:11:07.47+00	\N	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-beba5aab-4542-496f-b054-3d49a4cc84bb	\N	\N	\N	pending	10	0	\N	\N	\N	\N	2026-04-28 00:15:10.275+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-28 00:15:10.275+00	\N	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-42c844b0-454a-4c10-840f-0f5a7acaf8ce	\N	\N	\N	pending	10	0	\N	\N	\N	\N	2026-04-28 00:15:16.955+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-28 00:15:16.955+00	\N	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-c9afe94a-0b8c-48cd-b08b-fa83312a10fd	\N	\N	\N	pending	20	0	\N	\N	\N	\N	2026-04-28 00:18:33.458+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي وتنظيف) x1 = 20ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-28 00:18:33.458+00	\N	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
-510e4728-ffb9-452e-8a68-6e0d426414d5	3cfaff3b-02fa-4954-b94f-2549ff58715e	ee2126c2-d675-441b-bc19-c96196e3db6b	\N	accepted	666	10	\N	\N	\N	cash_on_delivery	2026-04-29 09:26:36.408+00	Sherif	01033833119	ابو سعيد سوبر ماركت 	01088888888	\N	\N	["لبن خالي الدسم جهينة 1 لتر x1 = 666 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 09:27:07.378537+00	2026-04-29 09:27:07.228+00	,الشيخ زايد 	ابو سعيد سوبر ماركت 	supermarket	\N	\N	\N	\N	\N	\N	f	\N
-fc5ffc9d-d90f-4280-a56a-6ac2fa40d848	3cfaff3b-02fa-4954-b94f-2549ff58715e	ee2126c2-d675-441b-bc19-c96196e3db6b	\N	accepted	1332	10	\N	\N	\N	cash_on_delivery	2026-04-29 10:01:42.041+00	Sherif	01033833119	ابو سعيد سوبر ماركت 	01088888888	\N	\N	["لبن خالي الدسم جهينة 1 لتر x2 = 1332 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 10:02:27.420234+00	2026-04-29 10:02:27.258+00	الشيخ زايد 	ابو سعيد سوبر ماركت 	supermarket	\N	\N	\N	\N	\N	\N	f	\N
-8a3bcb3d-f1a7-41ee-b5c1-0a76c97e9a03	\N	bbc5016a-00b6-4636-97c3-0ab630d65b63	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-28 00:18:41.463+00	Sherif	01033833119	كرم	010222222222	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 17:20:59.727546+00	2026-04-29 17:20:59.665+00	H	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-d6649d26-91a3-40d0-865d-f9562d162d65	\N	bbc5016a-00b6-4636-97c3-0ab630d65b63	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-28 00:15:39.244+00	Sherif	01033833119	كرم	010222222222	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 17:21:03.864607+00	2026-04-29 17:21:03.809+00	H	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-086ca995-ffc1-4cc2-a2ce-4465d6c95680	\N	bbc5016a-00b6-4636-97c3-0ab630d65b63	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-28 00:14:50.388+00	Sherif	01033833119	كرم	010222222222	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 17:21:05.962662+00	2026-04-29 17:21:05.92+00	H	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-fe76adf3-e6bf-48a3-94ab-271dcc8be725	\N	bbc5016a-00b6-4636-97c3-0ab630d65b63	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-28 00:10:40.792+00	Sherif	01033833119	كرم	010222222222	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 17:21:11.959882+00	2026-04-29 17:21:11.91+00	H	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-c0d0a650-a232-44d8-b764-84cb795f107b	\N	bbc5016a-00b6-4636-97c3-0ab630d65b63	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-28 00:11:29.587+00	Sherif	01033833119	كرم	010222222222	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 17:21:09.327643+00	2026-04-29 17:21:09.276+00	H	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-3d2d50ed-9e15-4f5a-9a77-e1358a29bfaf	\N	bbc5016a-00b6-4636-97c3-0ab630d65b63	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-28 00:03:39.871+00	Sherif	01033833119	كرم	010222222222	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 17:21:14.20881+00	2026-04-29 17:21:14.153+00	H	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-40267099-9a08-4943-893c-cf86eaeae922	\N	bbc5016a-00b6-4636-97c3-0ab630d65b63	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-28 00:03:23.793+00	Sherif	01033833119	كرم	010222222222	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 17:21:17.587782+00	2026-04-29 17:21:17.543+00	H	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-e6500d3d-2575-4d77-824e-821dc5ac4f1a	\N	bbc5016a-00b6-4636-97c3-0ab630d65b63	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-27 23:59:40.724+00	Sherif	01033833119	كرم	010222222222	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 17:21:22.186651+00	2026-04-29 17:21:22.143+00	H	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-5892ee32-6254-43bd-851b-84a447106410	\N	bbc5016a-00b6-4636-97c3-0ab630d65b63	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-27 23:47:55.597+00	Sherif	01033833119	كرم	010222222222	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 17:21:25.769626+00	2026-04-29 17:21:25.721+00	H	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-2b99e4c6-a132-45cf-9170-4272ce7a1d36	3cfaff3b-02fa-4954-b94f-2549ff58715e	ee2126c2-d675-441b-bc19-c96196e3db6b	\N	accepted	666	10	\N	\N	\N	cash_on_delivery	2026-04-29 10:01:57.013+00	Sherif	01033833119	ابو سعيد سوبر ماركت 	01088888888	\N	\N	["لبن خالي الدسم جهينة 1 لتر x1 = 666 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 10:02:23.350636+00	2026-04-29 10:02:23.229+00	الشيخ زايد 	ابو سعيد سوبر ماركت 	supermarket	\N	\N	\N	\N	\N	\N	f	\N
-a2594a92-f49b-4ff7-a764-652f959a21b7	3cfaff3b-02fa-4954-b94f-2549ff58715e	ee2126c2-d675-441b-bc19-c96196e3db6b	\N	accepted	54	10	\N	\N	\N	cash_on_delivery	2026-04-29 12:55:04.072+00	Sherif	01033833119	ابو سعيد سوبر ماركت 	01088888888	\N	\N	["Hh x1 = 54 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 12:55:27.211162+00	2026-04-29 12:55:27.147+00	H	ابو سعيد سوبر ماركت 	supermarket	\N	\N	\N	\N	\N	\N	f	\N
-5f1413ae-3320-49cd-8151-7d8cccd72e87	3cfaff3b-02fa-4954-b94f-2549ff58715e	ee2126c2-d675-441b-bc19-c96196e3db6b	\N	accepted	54	10	\N	\N	\N	cash_on_delivery	2026-04-29 13:01:42.651+00	Sherif	01033833119	ابو سعيد سوبر ماركت 	01088888888	\N	\N	["Hh x1 = 54 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 13:02:32.846912+00	2026-04-29 13:02:32.733+00	H	ابو سعيد سوبر ماركت 	supermarket	\N	\N	\N	\N	\N	\N	f	\N
-3e9e667f-5290-44f3-9897-fd0ae3669d14	7a388af4-3139-4526-857e-cdc524728615	ee2126c2-d675-441b-bc19-c96196e3db6b	\N	delivered	18	10	\N	\N	\N	cash_on_delivery	2026-04-29 19:38:16.83+00	Youssif ghazi	01557859221	ابو سعيد سوبر ماركت 	01088888888	\N	\N	["بسبسي x1 = 18 ج"]	\N	\N	\N	\N		اقبل الطلب لوسمحت	[]	{}	0	f	\N	\N	\N	\N	28	\N	\N	\N	2026-04-29 19:38:53.222065+00	2026-04-29 19:38:28.026+00	Gfb	ابو سعيد سوبر ماركت 	supermarket	2026-04-29 19:38:52.822	\N	\N	\N	\N	2026-04-29 19:38:50.517+00	f	\N
-1f3828c6-ca58-47b9-b2d8-89ca0189a576	\N	14837ed4-2c89-4833-affb-f2fd753208b1	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-30 22:27:38.038+00	Sherif	01033833119	Thomas Cook Tours	01099999999	\N	\N	["نوع الرحلة: ذهاب فقط", "مطار المغادرة: القاهرة ", "تاريخ الذهاب: 2026-05-07", "مطار الوصول: دبي", "البالغين: 1", "درجة السفر: اقتصادية"]	\N	\N	\N	\N	نوع الرحلة: ذهاب فقط\nمطار المغادرة: القاهرة \nتاريخ الذهاب: 2026-05-07\nمطار الوصول: دبي\nالبالغين: 1\nدرجة السفر: اقتصادية		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-30 22:37:33.923651+00	2026-04-30 22:37:33.844+00	83	حجز طيران	thomascook	\N	\N	\N	\N	\N	\N	f	\N
-c5fa830f-872e-4b42-b11e-4fa9ffffb8ff	3cfaff3b-02fa-4954-b94f-2549ff58715e	ee2126c2-d675-441b-bc19-c96196e3db6b	\N	delivered	100	50	\N	\N	\N	cash_on_delivery	2026-04-29 19:28:26.936+00	Sherif	01033833119	ابو سعيد سوبر ماركت 	01088888888	\N	\N	["لبن خالي الدسم جهينة 1 لتر x1 = 666 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	150	\N	\N	\N	2026-04-29 19:30:52.410697+00	2026-04-29 19:28:50.201+00	G	ابو سعيد سوبر ماركت 	supermarket	2026-04-29 19:30:52.368	\N	\N	\N	\N	2026-04-29 19:30:49.068+00	f	\N
-e3ecc3e7-87f4-4202-b38c-e83906422740	94c662ff-7cbb-4aec-a003-72372e11110f	ee2126c2-d675-441b-bc19-c96196e3db6b	\N	delivered	744	50	\N	\N	\N	cash_on_delivery	2026-04-29 17:17:32.869+00	Norhan said ghazy	01009676888	ابو سعيد سوبر ماركت 	01088888888	\N	\N	["لبن خالي الدسم جهينة 1 لتر x1 = 666 ج", "بسبسي x1 = 18 ج", "مربى فراولة x1 = 60 ج"]	\N	\N	\N	\N		اريد بطاطس كبير	[]	{}	0	f	\N	\N	\N	\N	794	\N	\N	\N	2026-04-29 17:18:48.114584+00	2026-04-29 17:18:03.56+00	Hfhh trryu hff	ابو سعيد سوبر ماركت 	supermarket	2026-04-29 17:18:48.05	\N	\N	\N	\N	2026-04-29 17:18:39.372+00	f	\N
-c54016d0-2bd1-4522-88a2-a93186bcd560	\N	bbc5016a-00b6-4636-97c3-0ab630d65b63	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-28 00:03:03.166+00	Sherif	01033833119	كرم	010222222222	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 17:21:21.117562+00	2026-04-29 17:21:21.065+00	H	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-b9c76ea9-5424-4f9a-a06a-f08dbcbb0fcc	\N	bbc5016a-00b6-4636-97c3-0ab630d65b63	\N	preparing	\N	0	\N	\N	\N	\N	2026-04-29 17:20:36.291+00	Norhan said ghazy	01009676888	كرم	010222222222	\N	\N	[]	\N	\N	\N	\N			["https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777483233729_rxwp4TxOM.jpg"]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 17:23:55.39347+00	2026-04-29 17:21:28.578+00	Hfhh trryu hff	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-296af387-64ec-4f5d-955b-57ba97496958	\N	bbc5016a-00b6-4636-97c3-0ab630d65b63	\N	accepted	\N	0	\N	\N	\N	\N	2026-04-29 17:24:06.775+00	Norhan said ghazy	01009676888	كرم	010222222222	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 17:24:15.808516+00	2026-04-29 17:24:15.749+00	Hfhh trryu hff	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N
-df74416d-dea7-40c7-a7c8-37efcfa5174c	94c662ff-7cbb-4aec-a003-72372e11110f	\N	\N	pending	330	30	\N	\N	\N	cash	2026-04-29 17:28:26.107+00	Norhan said ghazy	01009676888	\N	\N	\N	\N	["مخدة x2 = 330ج"]	\N	\N	\N	\N	\N	للن	[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 17:28:26.786974+00	\N	غ	متجر Zid	eshop	\N	\N	\N	\N	\N	\N	f	\N
-bb68cf48-fce5-413b-8472-72cbd56cbd14	3cfaff3b-02fa-4954-b94f-2549ff58715e	\N	\N	delivered	165	30	\N	\N	\N	cash	2026-04-29 19:32:45.474+00	Sherif	01033833119	\N	\N	\N	\N	["مخدة x1 = 165ج"]	\N	\N	\N	\N	\N	M	[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 19:33:52.096642+00	\N	G	متجر Zid	eshop	2026-04-29 19:33:52.041	\N	\N	\N	\N	\N	f	\N
-ba0bfb2f-b547-4668-a864-3044128d9167	\N	\N	\N	pending	50	0	\N	\N	\N	\N	2026-04-29 19:36:27.827+00	Sherif	01033833119	\N	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج", "بنطلون (كي وتنظيف) x2 = 40ج"]	\N	\N	\N	\N		لوسمحت اقبل طلبي 	[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-04-29 19:36:27.827+00	\N	Gfb	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N
+COPY public.orders (id, user_id, merchant_id, driver_id, status, total_price, delivery_fee, address_text, location_lat, location_lng, payment_method, created_at, customer_name, customer_phone, merchant_name, merchant_phone, delivery_notes, order_notes, items, "customerPhone", "serviceName", "serviceType", "totalPrice", description, notes, image_urls, order_details, pickup_fee, has_pickup, pickup_address, driver_name, driver_phone, merchant_place, final_total, subtotal, voice_url, raw_text, updated_at, accepted_at, customer_address, service_name, service_type, delivered_at, cancelled_at, cancellation_reason, price_set_at, driver_assigned_at, delivery_started_at, is_guest, guest_phone, sub_service_id) FROM stdin;
+d6390c33-c4ae-4877-98a7-e96e58d22f41	\N	ddf6af56-4979-46a5-a977-f01ce6ebaeec	\N	accepted	\N	0	\N	\N	\N	\N	2026-05-05 08:35:54.959+00	عميل	\N	Thomas Cook Tours	01000000001	\N	\N	["مطار المغادرة: القاهرة", "مطار الوصول: دبي", "تاريخ المغادرة: 2026-05-14", "تاريخ العودة: 2026-05-21", "عدد المسافرين: 1", "درجة السفر: اقتصادية"]	\N	\N	\N	\N	مطار المغادرة: القاهرة\nمطار الوصول: دبي\nتاريخ المغادرة: 2026-05-14\nتاريخ العودة: 2026-05-21\nعدد المسافرين: 1\nدرجة السفر: اقتصادية		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-05 08:38:08.027879+00	2026-05-05 08:38:07.993+00		حجز طيران	travel	\N	\N	\N	\N	\N	\N	f	\N	\N
+2e965cd4-41b2-4520-9933-f648fa96bf82	a4663b5a-07e9-49cd-b3b1-8af587f75056	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-09 17:55:24.23+00	نورهان	01009676888	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-09 17:55:43.996485+00	\N	تالببب بيييي ييس	صن شاين	supermarket	\N	\N	ن	\N	\N	\N	f	\N	\N
+15ab3ffe-1064-48f7-b853-f8bed6cc8841	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 10:52:18.793+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 10:53:03.887542+00	\N	Yy	صن شاين	supermarket	\N	2026-05-11 10:53:03.367	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+75a2114e-f0c2-4e0b-a682-3f8dcd07547c	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-10 03:36:35.49+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 03:42:14.571168+00	\N	H	صن شاين	supermarket	\N	2026-05-10 03:42:14.558	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+12ecce55-e660-41bd-8eb6-a2de5744ecdb	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-10 03:29:05.033+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 03:42:19.675859+00	\N	H	صن شاين	supermarket	\N	2026-05-10 03:42:19.657	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+ff0f02dd-4e0c-4d97-84fd-6d52798d3d0e	\N	\N	\N	pending	\N	0	\N	\N	\N	\N	2026-05-10 04:56:02.727+00	شريف	01033833119	\N	\N	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 04:56:02.727+00	\N	H	سباكه	sabak	\N	\N	\N	\N	\N	\N	f	\N	\N
+3090162e-74ff-46ac-8867-06f3ab7941a7	\N	ddf6af56-4979-46a5-a977-f01ce6ebaeec	\N	pending	\N	0	\N	\N	\N	\N	2026-05-10 07:20:33.504+00	شريف	01033833119	Thomas Cook Tours	\N	\N	\N	["الوجهة: J", "تاريخ الوصول: 2026-05-19", "تاريخ المغادرة: 2026-05-28", "عدد الغرف: 1", "عدد النزلاء: 1"]	\N	\N	\N	\N	الوجهة: J\nتاريخ الوصول: 2026-05-19\nتاريخ المغادرة: 2026-05-28\nعدد الغرف: 1\nعدد النزلاء: 1		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 07:20:33.504+00	\N		حجز فنادق	travel	\N	\N	\N	\N	\N	\N	f	\N	\N
+a7ddb8f5-4aa9-4725-9717-289b6ccc698a	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	accepted	60	50	\N	\N	\N	cash_on_delivery	2026-05-07 16:36:14.028+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-07 16:58:31.674694+00	2026-05-07 16:36:56.729+00	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+81980b4a-3f51-4915-99d8-865208c31e46	\N	ddf6af56-4979-46a5-a977-f01ce6ebaeec	\N	pending	\N	0	\N	\N	\N	\N	2026-05-10 08:17:09.14+00	شريف	01033833119	Thomas Cook Tours	\N	\N	\N	["مطار المغادرة: تب", "مطار المغادرة: تب", "مطار المغادرة: تب", "مطار المغادرة: تب", "مطار الوصول: نبن", "مطار الوصول: نبن", "مطار الوصول: نبن", "مطار الوصول: نبن", "تاريخ المغادرة: 2026-05-07", "تاريخ المغادرة: 2026-05-07", "تاريخ المغادرة: 2026-05-07", "تاريخ المغادرة: 2026-05-07", "تاريخ العودة: 2026-05-14", "تاريخ العودة: 2026-05-14", "تاريخ العودة: 2026-05-14", "تاريخ العودة: 2026-05-14", "عدد المسافرين: 2", "عدد المسافرين: 2", "عدد المسافرين: 2", "عدد المسافرين: 2", "درجة السفر: اقتصادية", "درجة السفر: اقتصادية", "درجة السفر: اقتصادية", "درجة السفر: اقتصادية"]	\N	\N	\N	\N	مطار المغادرة: تب\nمطار المغادرة: تب\nمطار المغادرة: تب\nمطار المغادرة: تب\nمطار الوصول: نبن\nمطار الوصول: نبن\nمطار الوصول: نبن\nمطار الوصول: نبن\nتاريخ المغادرة: 2026-05-07\nتاريخ المغادرة: 2026-05-07\nتاريخ المغادرة: 2026-05-07\nتاريخ المغادرة: 2026-05-07\nتاريخ العودة: 2026-05-14\nتاريخ العودة: 2026-05-14\nتاريخ العودة: 2026-05-14\nتاريخ العودة: 2026-05-14\nعدد المسافرين: 2\nعدد المسافرين: 2\nعدد المسافرين: 2\nعدد المسافرين: 2\nدرجة السفر: اقتصادية\nدرجة السفر: اقتصادية\nدرجة السفر: اقتصادية\nدرجة السفر: اقتصادية		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 08:17:09.14+00	\N		حجز طيران	travel	\N	\N	\N	\N	\N	\N	f	\N	20956352-1809-4e50-9a04-577781242eae
+cc9cde69-96dc-4c37-b57e-26a442fd036e	\N	\N	\N	pending	\N	0	\N	\N	\N	\N	2026-05-10 08:17:49.368+00	شريف	01033833119	\N	\N	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 08:17:49.368+00	\N	R	سباكه	sabak	\N	\N	\N	\N	\N	\N	f	\N	\N
+5b6e35a6-48bd-40ee-b394-cb5c12ace401	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	110	50	\N	\N	\N	cash_on_delivery	2026-05-10 10:39:18.877+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["لبن المراعي كامل الدسم 1 لتر x2 = 110 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	160	\N	\N	\N	2026-05-10 10:40:30.699505+00	2026-05-10 10:39:48.283+00	T	صن شاين	supermarket	2026-05-10 10:40:30.611	\N	\N	\N	\N	2026-05-10 10:40:24.243+00	f	\N	\N
+0e01f129-0bfb-4d23-9c91-3852b4b55a90	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	accepted	60	50	\N	\N	\N	cash_on_delivery	2026-05-10 10:42:59.57+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-10 10:43:13.845346+00	2026-05-10 10:43:13.77+00	T	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+0762ecb6-47ad-44f0-a457-cdd5d65a4cb6	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	accepted	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 05:56:59.582+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 06:50:32.349244+00	2026-05-11 06:50:32.03+00	U	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+2fa6d695-6ece-466f-b646-6a4d662695c3	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	55	50	\N	\N	\N	cash_on_delivery	2026-05-11 14:26:46.103+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-11 14:28:31.020955+00	2026-05-11 14:27:09.445+00	H	صن شاين	supermarket	2026-05-11 14:28:31.004	\N	\N	\N	\N	2026-05-11 14:28:20.814+00	f	\N	\N
+9571f93a-3aac-4329-87d6-147501d54b26	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 10:54:39.775+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 10:55:45.680644+00	2026-05-11 10:55:16.349+00	Yy	صن شاين	supermarket	2026-05-11 10:55:45.606	\N	\N	\N	\N	2026-05-11 10:55:36.603+00	f	\N	\N
+6a1b860d-280a-49bc-96c1-2899f16fb932	\N	cb273744-cf70-486d-b6e1-8c1c4932b140	\N	delivered	10	0	\N	\N	\N	\N	2026-05-10 19:56:39.349+00	شريف	01033833119	مكوجي	01099999999	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	10	\N	\N	\N	2026-05-11 10:56:56.759793+00	2026-05-11 10:56:40.456+00	H	مكوجي	dryclean	2026-05-11 10:56:56.677	\N	\N	\N	\N	2026-05-11 10:56:52.913+00	f	\N	\N
+e2a9fcdb-f4c3-4f42-b435-7e7cb8df15ac	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 12:20:45.588+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 14:50:45.114748+00	2026-05-11 14:27:13.144+00	H	صن شاين	supermarket	2026-05-11 14:50:44.925	\N	\N	\N	\N	2026-05-11 14:50:21.139+00	f	\N	\N
+6bb71798-6bd0-4ffb-bb98-f6dfb02d189c	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 14:30:25.147+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 14:30:59.455078+00	2026-05-11 14:30:37.832+00	H	صن شاين	supermarket	2026-05-11 14:30:59.44	\N	\N	\N	\N	2026-05-11 14:30:52.414+00	f	\N	\N
+1c340a9a-27a1-4c83-a041-f19ed2595171	\N	ddf6af56-4979-46a5-a977-f01ce6ebaeec	\N	cancelled	\N	0	\N	\N	\N	\N	2026-05-05 08:54:02.038+00	شريف	01033833119	Thomas Cook Tours	\N	\N	\N	["📍 الوجهة: الغردقه", "📅 عدد الأيام: 3", "👥 عدد الأشخاص: 2"]	\N	\N	\N	\N	📍 الوجهة: الغردقه\n📅 عدد الأيام: 3\n👥 عدد الأشخاص: 2		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-05 14:37:51.278019+00	\N	الشيخ زايد	سياحة داخلية	travel	\N	2026-05-05 14:37:51.275	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+ad84861f-3a1c-4c01-adf1-d1fe8623b328	\N	ddf6af56-4979-46a5-a977-f01ce6ebaeec	\N	pending	\N	0	\N	\N	\N	\N	2026-05-10 07:07:08.463+00	شريف	01033833119	Thomas Cook Tours	\N	\N	\N	["مطار المغادرة: Hdhe", "مطار المغادرة: Hdhe", "مطار المغادرة: Hdhe", "مطار المغادرة: Hdhe", "مطار الوصول: Js", "مطار الوصول: Js", "مطار الوصول: Js", "مطار الوصول: Js", "تاريخ المغادرة: 2026-05-13", "تاريخ المغادرة: 2026-05-13", "تاريخ المغادرة: 2026-05-13", "تاريخ المغادرة: 2026-05-13", "تاريخ العودة: 2026-05-13", "تاريخ العودة: 2026-05-13", "تاريخ العودة: 2026-05-13", "تاريخ العودة: 2026-05-13", "عدد المسافرين: 1", "عدد المسافرين: 1", "عدد المسافرين: 1", "عدد المسافرين: 1", "درجة السفر: اقتصادية", "درجة السفر: اقتصادية", "درجة السفر: اقتصادية", "درجة السفر: اقتصادية"]	\N	\N	\N	\N	مطار المغادرة: Hdhe\nمطار المغادرة: Hdhe\nمطار المغادرة: Hdhe\nمطار المغادرة: Hdhe\nمطار الوصول: Js\nمطار الوصول: Js\nمطار الوصول: Js\nمطار الوصول: Js\nتاريخ المغادرة: 2026-05-13\nتاريخ المغادرة: 2026-05-13\nتاريخ المغادرة: 2026-05-13\nتاريخ المغادرة: 2026-05-13\nتاريخ العودة: 2026-05-13\nتاريخ العودة: 2026-05-13\nتاريخ العودة: 2026-05-13\nتاريخ العودة: 2026-05-13\nعدد المسافرين: 1\nعدد المسافرين: 1\nعدد المسافرين: 1\nعدد المسافرين: 1\nدرجة السفر: اقتصادية\nدرجة السفر: اقتصادية\nدرجة السفر: اقتصادية\nدرجة السفر: اقتصادية		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 07:07:08.463+00	\N		حجز طيران	travel	\N	\N	\N	\N	\N	\N	f	\N	\N
+2411929b-fb38-4405-8617-57dd84c6314d	\N	ddf6af56-4979-46a5-a977-f01ce6ebaeec	\N	pending	\N	0	\N	\N	\N	\N	2026-05-10 07:24:19.556+00	شريف	01033833119	Thomas Cook Tours	\N	\N	\N	["الوجهة: J", "تاريخ الوصول: 2026-05-07", "تاريخ المغادرة: 2026-05-14", "عدد الغرف: 1", "عدد النزلاء: 1"]	\N	\N	\N	\N	الوجهة: J\nتاريخ الوصول: 2026-05-07\nتاريخ المغادرة: 2026-05-14\nعدد الغرف: 1\nعدد النزلاء: 1		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 07:24:19.556+00	\N		حجز فنادق	travel	\N	\N	\N	\N	\N	\N	f	\N	\N
+4be0260f-15e8-4717-a6e4-4d27a7943317	\N	\N	\N	pending	10	0	\N	\N	\N	\N	2026-05-10 08:17:37.889+00	شريف	01033833119	\N	\N	\N	\N	["فينو (كبير) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 08:17:37.889+00	\N	R	مخبز	bakery	\N	\N	\N	\N	\N	\N	f	\N	\N
+3524d18d-921d-46c5-a5d7-834bd6e6ef11	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	180	50	\N	\N	\N	cash_on_delivery	2026-05-05 14:51:01.201+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x3 = 180 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	230	\N	\N	\N	2026-05-06 20:48:49.334737+00	2026-05-05 14:56:33.139+00	ت	صن شاين	supermarket	2026-05-06 20:48:49.329	\N	\N	\N	\N	2026-05-06 20:48:47.048+00	f	\N	\N
+cfaab0dd-34d4-4dee-aa47-6dcb087262fd	\N	cb273744-cf70-486d-b6e1-8c1c4932b140	\N	accepted	10	0	\N	\N	\N	\N	2026-05-07 15:21:36.37+00	شريف سعيد	01077777777	مكوجي	01099999999	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-07 15:22:18.002654+00	2026-05-07 15:22:17.885+00	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N	\N
+25089535-06e2-4606-b51c-c1cee0c2686f	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-09 18:39:31.688+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-09 18:40:25.793267+00	\N	H	صن شاين	supermarket	\N	\N	لا اريده	\N	\N	\N	f	\N	\N
+0e3d0987-9118-440c-96dd-b56952d1ccc1	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-10 20:30:27.496+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-10 20:30:57.453312+00	\N	U	صن شاين	supermarket	\N	\N	H	\N	\N	\N	f	\N	\N
+7cb756e3-508a-4dc9-beb4-0976fe3f7339	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	55	50	\N	\N	\N	cash_on_delivery	2026-05-11 14:36:38.66+00	شريف	01033833119	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-11 14:57:28.477927+00	\N	H	صن شاين	supermarket	\N	\N	J	\N	\N	\N	f	\N	\N
+667b7150-1829-4125-9161-e70e215c5a7d	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-10 19:29:16.432+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-10 19:31:05.952967+00	2026-05-10 19:30:10.052+00	H	صن شاين	supermarket	2026-05-10 19:31:05.313	\N	\N	\N	\N	2026-05-10 19:31:02.424+00	f	\N	\N
+28a86b32-bf83-4b0b-a728-d0db726f8f7f	94d3fa22-f704-4be2-aacf-a09f7c030f9c	959f739f-5ae3-4811-a1ab-434012ff11e9	\N	cancelled	50	3596	\N	\N	\N	cash_on_delivery	2026-05-09 19:20:40.33+00	شريف	01033833119	Joe	\N	\N	\N	["محمد عبيد x1 = 50 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-09 19:22:38.3195+00	\N	H	Joe	home_chef	\N	2026-05-09 19:22:38.282	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+e4feaef3-03c0-4794-a3f9-17f4878eb8aa	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-10 03:37:56.781+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 03:41:53.352568+00	\N	H	صن شاين	supermarket	\N	2026-05-10 03:41:53.336	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+53516a01-0759-4e51-8f64-5bcf49f34eeb	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-10 03:31:47.569+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 03:42:10.159323+00	\N	H	صن شاين	supermarket	\N	2026-05-10 03:42:10.136	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+3c163ea1-3462-4452-9f7a-004682f30817	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	accepted	60	50	\N	\N	\N	cash_on_delivery	2026-05-10 20:28:27.736+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-10 20:28:58.285247+00	2026-05-10 20:28:57.797+00	U	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+74aa0728-b0f0-4d87-9692-94b62512b903	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 11:34:40.847+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 11:35:02.677124+00	2026-05-11 11:34:49.117+00	H	صن شاين	supermarket	2026-05-11 11:35:02.584	\N	\N	\N	\N	2026-05-11 11:34:59.834+00	f	\N	\N
+aee21ca9-914f-48f6-bd26-13428219a0a3	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 12:21:28.742+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 12:22:09.730484+00	2026-05-11 12:21:50.131+00	H	صن شاين	supermarket	2026-05-11 12:22:09.287	\N	\N	\N	\N	2026-05-11 12:22:04.814+00	f	\N	\N
+d897a715-78d8-41f8-80a4-d5865bf40a05	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 12:21:14.847+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 14:16:35.446573+00	2026-05-11 14:16:19.126+00	H	صن شاين	supermarket	2026-05-11 14:16:35.385	\N	\N	\N	\N	2026-05-11 14:16:32.964+00	f	\N	\N
+4667334d-cb85-49ca-aea2-861b03e25525	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	complete	55	50	\N	\N	\N	cash_on_delivery	2026-05-11 07:24:17.853+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-11 15:43:19.725281+00	2026-05-11 07:25:58.577+00	U	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+cfa92ebd-cec8-43ea-a7aa-32313ea47e4a	\N	\N	\N	pending	\N	0	\N	\N	\N	\N	2026-05-11 20:11:24.079+00	شريف	01033833119	\N	\N	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-11 20:11:24.079+00	\N	H	نجاره	wood	\N	\N	\N	\N	\N	\N	f	\N	\N
+07d0de83-a961-4938-b6eb-fe3ddab8bc39	\N	\N	\N	pending	\N	0	\N	\N	\N	\N	2026-05-11 20:54:18.469+00	شريف	01033833119	\N	\N	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-11 20:54:18.469+00	\N	G	نجاره	wood	\N	\N	\N	\N	\N	\N	f	\N	\N
+2b183935-618b-4130-aa08-d2710051abc5	\N	\N	\N	pending	\N	0	\N	\N	\N	\N	2026-05-12 06:40:21.362+00	شريف	01033833119	\N	\N	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-12 06:40:21.362+00	\N	Tstd	سباكه	sabak	\N	\N	\N	\N	\N	\N	f	\N	\N
+0e2bf7ca-81aa-4790-8993-41fca19aa1f5	\N	ddf6af56-4979-46a5-a977-f01ce6ebaeec	\N	cancelled	\N	0	\N	\N	\N	\N	2026-05-05 10:58:56.585+00	شريف	01033833119	Thomas Cook Tours	\N	\N	\N	["مطار المغادرة: القاهره", "مطار الوصول: دبي", "تاريخ المغادرة: 2026-05-21", "تاريخ العودة: 2026-05-25", "عدد المسافرين: 1", "درجة السفر: اقتصادية"]	\N	\N	\N	\N	مطار المغادرة: القاهره\nمطار الوصول: دبي\nتاريخ المغادرة: 2026-05-21\nتاريخ العودة: 2026-05-25\nعدد المسافرين: 1\nدرجة السفر: اقتصادية		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-05 14:37:41.93424+00	\N		حجز طيران	travel	\N	2026-05-05 14:37:41.917	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+a55d2fbe-2720-4757-b902-9620cf629f94	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	accepted	60	50	\N	\N	\N	cash_on_delivery	2026-05-10 19:51:02.232+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-10 20:27:55.358355+00	2026-05-10 20:27:54.825+00	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+8eb76fca-a8b9-49e1-a872-0bd9a286337d	\N	\N	\N	accepted	220	0	\N	\N	\N	cash	2026-04-26 22:57:45.115+00	S	0	\N	\N	\N	\N	["مخدة x1 = 165ج", "منتج جديد x1 = 55ج"]	\N	\N	\N	\N	\N		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-07 07:02:10.382732+00	\N	J	متجر Zid	eshop	\N	\N	\N	\N	\N	\N	t	0	\N
+9094b315-0045-4cee-9953-6fab3bbbf7f4	\N	cb273744-cf70-486d-b6e1-8c1c4932b140	\N	accepted	10	0	\N	\N	\N	\N	2026-05-07 15:21:45.728+00	شريف سعيد	01077777777	مكوجي	01099999999	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-07 15:22:15.263042+00	2026-05-07 15:22:15.187+00	H	مكوجي	dryclean	\N	\N	\N	\N	\N	\N	f	\N	\N
+43598250-0904-4a10-b57d-d45de329adb8	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	accepted	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 05:46:52.301+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 05:55:47.211046+00	2026-05-11 05:55:47.017+00	U	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+6d2cb703-2c67-4f84-95e9-740ec2816a7c	a4663b5a-07e9-49cd-b3b1-8af587f75056	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	385	50	\N	\N	\N	cash_on_delivery	2026-05-09 17:17:54.96+00	نورهان	01009676888	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x2 = 120 ج", "مكرونة إسباجيتي x1 = 25 ج", "زيت زيتون بكر x1 = 150 ج", "جبنة رومي قديمة x1 = 90 ج"]	\N	\N	\N	\N		ابيس يسسسس\n	[]	{}	0	f	\N	\N	\N	\N	435	\N	\N	\N	2026-05-09 17:19:03.441959+00	2026-05-09 17:18:25.438+00	تالببب بيييي ييس	صن شاين	supermarket	2026-05-09 17:19:03.431	\N	\N	\N	\N	2026-05-09 17:18:55.394+00	f	\N	\N
+73382d6b-d82b-45d4-9ad3-1d0ad1a4a45a	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-10 03:38:50.311+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 03:41:47.121389+00	\N	H	صن شاين	supermarket	\N	2026-05-10 03:41:47.102	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+eba3df9f-26e4-4df1-b6d7-370d9e292236	94d3fa22-f704-4be2-aacf-a09f7c030f9c	959f739f-5ae3-4811-a1ab-434012ff11e9	\N	cancelled	50	3596	\N	\N	\N	cash_on_delivery	2026-05-10 03:32:12.682+00	شريف	01033833119	Joe	\N	\N	\N	["محمد عبيد x1 = 50 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 03:42:05.664146+00	\N	H	Joe	home_chef	\N	2026-05-10 03:42:05.645	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+c9fefd39-c02a-403f-9c86-95336039f834	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-09 20:53:32.864+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 03:42:28.327578+00	\N	H	صن شاين	supermarket	\N	2026-05-10 03:42:28.295	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+f6659821-0290-4f01-a26f-a5475323df99	\N	ddf6af56-4979-46a5-a977-f01ce6ebaeec	\N	pending	\N	0	\N	\N	\N	\N	2026-05-10 08:11:03.605+00	شريف	01033833119	Thomas Cook Tours	\N	\N	\N	["الوجهة: تبت", "تاريخ الوصول: 2026-05-06", "تاريخ المغادرة: 2026-05-14", "عدد الغرف: 1", "عدد النزلاء: 1"]	\N	\N	\N	\N	الوجهة: تبت\nتاريخ الوصول: 2026-05-06\nتاريخ المغادرة: 2026-05-14\nعدد الغرف: 1\nعدد النزلاء: 1		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 08:11:03.605+00	\N		حجز فنادق	travel	\N	\N	\N	\N	\N	\N	f	\N	\N
+79c070ac-5139-4ca9-840f-035b76b46d28	\N	\N	\N	pending	\N	0	\N	\N	\N	\N	2026-05-10 08:22:11.8+00	شريف	01033833119	\N	\N	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 08:22:11.8+00	\N	R	سباكه	sabak	\N	\N	\N	\N	\N	\N	f	\N	\N
+6b364f2b-0849-4ed5-aeea-6598ac7175a5	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	accepted	55	50	\N	\N	\N	cash_on_delivery	2026-05-10 07:15:32.654+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-10 10:02:45.334637+00	2026-05-10 10:02:45.278+00	R	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+2a20fd20-a160-494b-8e8f-125e2594e698	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	55	50	\N	\N	\N	cash_on_delivery	2026-05-11 14:58:42.663+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-11 15:04:06.007365+00	2026-05-11 14:59:07.369+00	H	صن شاين	supermarket	2026-05-11 15:04:05.818	\N	\N	\N	\N	2026-05-11 15:04:03.589+00	f	\N	\N
+5e075ba0-7089-4772-a6e1-939bf82e927e	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	ready	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 14:57:46.155+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 14:58:17.023471+00	2026-05-11 14:57:56.366+00	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+506b6e99-6a8f-4a06-85a7-2a34fc28a7d0	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 12:49:49.616+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 12:52:57.58801+00	2026-05-11 12:52:35.571+00	H	صن شاين	supermarket	2026-05-11 12:52:57.56	\N	\N	\N	\N	2026-05-11 12:52:53.8+00	f	\N	\N
+2846e2c5-2978-471e-b746-c1b350eda05e	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 08:57:33.777+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 12:26:45.856446+00	2026-05-11 08:58:10.174+00	H	صن شاين	supermarket	2026-05-11 12:26:45.817	\N	\N	\N	\N	2026-05-11 12:26:43.219+00	f	\N	\N
+9ea1ca81-5e7a-4515-b1b6-c3fd824efbfe	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 11:41:13.975+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 11:42:30.766444+00	2026-05-11 11:41:30.839+00	H	صن شاين	supermarket	2026-05-11 11:42:30.662	\N	\N	\N	\N	2026-05-11 11:42:14.945+00	f	\N	\N
+af85cb5f-0e70-49e5-8611-e4e59e96c8e3	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	115	50	\N	\N	\N	cash_on_delivery	2026-05-11 14:48:03.036+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج", "جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	165	\N	\N	\N	2026-05-11 14:49:06.30011+00	2026-05-11 14:48:21.878+00	H	صن شاين	supermarket	2026-05-11 14:49:06.28	\N	\N	\N	\N	2026-05-11 14:48:54.537+00	f	\N	\N
+3264a1c3-5494-4f23-ab5a-8141c7e158e4	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	ready	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 15:08:33.572+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 15:09:09.498173+00	2026-05-11 15:09:02.493+00	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+9d994948-cc53-41bc-93c7-8edfa6a1bbb2	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	on_the_way	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 15:23:52.747+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 15:24:21.236491+00	2026-05-11 15:24:10.83+00	U	صن شاين	supermarket	\N	\N	\N	\N	\N	2026-05-11 15:24:21.208+00	f	\N	\N
+4a334103-a418-4866-b6a1-e8e9fc3e7593	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	complete	55	50	\N	\N	\N	cash_on_delivery	2026-05-11 15:35:25.656+00	شريف	01033833119	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-11 15:43:09.167955+00	\N	U	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+70fb7989-a8a5-4e6d-a5a8-5851af21af38	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	complete	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 15:45:21.346+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 15:46:07.450394+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+0d8820fd-6b8a-4bc2-ad35-bc3e0601ea9d	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	complete	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 17:02:50.438+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 17:03:24.284006+00	\N	U	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+9addf274-a1d7-4100-9fff-d92eea5f8e45	\N	\N	\N	pending	\N	0	\N	\N	\N	\N	2026-05-10 19:56:10.069+00	شريف	01033833119	\N	\N	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 19:56:10.069+00	\N	H	صيدلية	pharmacy	\N	\N	\N	\N	\N	\N	f	\N	\N
+2e33fee9-4e95-449b-b3fb-ee037c230b30	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	115	50	\N	\N	\N	cash_on_delivery	2026-05-06 20:47:59.699+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج", "لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	165	\N	\N	\N	2026-05-06 20:48:37.455712+00	2026-05-06 20:48:24.325+00	H	صن شاين	supermarket	2026-05-06 20:48:37.44	\N	\N	\N	\N	2026-05-06 20:48:35.249+00	f	\N	\N
+cf8231d9-0b93-4bac-a19e-7c6be3aca8bd	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-10 03:34:18.3+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 03:41:59.055907+00	\N	H	صن شاين	supermarket	\N	2026-05-10 03:41:59.039	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+e10b3215-5062-4a45-a9ee-da614928482d	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-05 11:01:53.822+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-06 20:48:59.172565+00	2026-05-05 14:56:35.722+00	ت	صن شاين	supermarket	2026-05-06 20:48:59.172	\N	\N	\N	\N	2026-05-06 20:48:57.26+00	f	\N	\N
+cfc8fa34-1ed6-4950-89ec-c6ebbc5fe336	\N	\N	\N	accepted	\N	0	\N	\N	\N	\N	2026-05-01 18:57:09.635+00	Yoyi	01012341234	\N	\N	\N	\N	["نوع الرحلة: ذهاب فقط", "مطار المغادرة: القاهرة", "تاريخ الذهاب: 2026-05-13", "مطار الوصول: دبي", "البالغين: 2", "الأطفال (2-12): 1", "الرضع (أقل من سنتين): 1", "درجة السفر: رجال أعمال"]	\N	\N	\N	\N	نوع الرحلة: ذهاب فقط\nمطار المغادرة: القاهرة\nتاريخ الذهاب: 2026-05-13\nمطار الوصول: دبي\nالبالغين: 2\nالأطفال (2-12): 1\nالرضع (أقل من سنتين): 1\nدرجة السفر: رجال أعمال		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-07 07:02:07.627273+00	\N	H	حجز طيران	thomascook	\N	\N	\N	\N	\N	\N	f	\N	\N
+1a2b00ec-c84b-4c41-90bc-9f8410422ec1	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	accepted	55	50	\N	\N	\N	cash_on_delivery	2026-05-07 16:35:44.631+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-07 16:37:00.145143+00	2026-05-07 16:37:00.006+00	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+162741f6-fe5a-4f8c-be96-587a1e4532ed	a4663b5a-07e9-49cd-b3b1-8af587f75056	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-09 17:54:16.542+00	نورهان	01009676888	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-09 17:54:58.361109+00	\N	تالببب بيييي ييس	صن شاين	supermarket	\N	\N	شكرا	\N	\N	\N	f	\N	\N
+6854ddec-17b2-4994-b529-02edc5d20632	a4663b5a-07e9-49cd-b3b1-8af587f75056	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	55	50	\N	\N	\N	cash_on_delivery	2026-05-09 17:55:56.275+00	نورهان	01009676888	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-09 17:56:22.055961+00	\N	تالببب بيييي ييس	صن شاين	supermarket	\N	2026-05-09 17:56:22.038	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+4cae8246-5795-437d-9368-9dd2234b2344	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	55	50	\N	\N	\N	cash_on_delivery	2026-05-10 03:27:09.248+00	شريف	01033833119	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 03:42:23.900282+00	\N	H	صن شاين	supermarket	\N	2026-05-10 03:42:23.882	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+f6dbf928-366e-4d63-96c8-461a3fc8f3ce	94d3fa22-f704-4be2-aacf-a09f7c030f9c	959f739f-5ae3-4811-a1ab-434012ff11e9	\N	pending	50	3596	\N	\N	\N	cash_on_delivery	2026-05-10 03:42:45.342+00	شريف	01033833119	Joe	\N	\N	\N	["محمد عبيد x1 = 50 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	3646	\N	\N	\N	2026-05-10 03:42:45.342+00	\N	H	Joe	home_chef	\N	\N	\N	\N	\N	\N	f	\N	\N
+de40541c-a967-4b36-930e-cef5604e4f26	\N	ddf6af56-4979-46a5-a977-f01ce6ebaeec	\N	pending	\N	0	\N	\N	\N	\N	2026-05-10 07:19:02.766+00	شريف	01033833119	Thomas Cook Tours	\N	\N	\N	["الوجهة: Hd", "تاريخ الوصول: 2026-05-06", "تاريخ المغادرة: 2026-05-07", "عدد الغرف: 1", "عدد النزلاء: 1"]	\N	\N	\N	\N	الوجهة: Hd\nتاريخ الوصول: 2026-05-06\nتاريخ المغادرة: 2026-05-07\nعدد الغرف: 1\nعدد النزلاء: 1		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 07:19:02.766+00	\N		حجز فنادق	travel	\N	\N	\N	\N	\N	\N	f	\N	\N
+ab925299-f53b-443a-9600-2536e5085cd3	\N	ddf6af56-4979-46a5-a977-f01ce6ebaeec	\N	pending	\N	0	\N	\N	\N	\N	2026-05-10 08:16:39.717+00	شريف	01033833119	Thomas Cook Tours	\N	\N	\N	["الوجهة: نبن", "تاريخ الوصول: 2026-05-13", "تاريخ المغادرة: 2026-05-14", "عدد الغرف: 1", "عدد النزلاء: 1"]	\N	\N	\N	\N	الوجهة: نبن\nتاريخ الوصول: 2026-05-13\nتاريخ المغادرة: 2026-05-14\nعدد الغرف: 1\nعدد النزلاء: 1		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 08:16:39.717+00	\N		حجز فنادق	travel	\N	\N	\N	\N	\N	\N	f	\N	80223561-920a-4949-aca4-f649d9687be2
+5f355c7a-0705-4953-a453-315f9b0855c3	\N	\N	\N	cancelled	\N	0	\N	\N	\N	\N	2026-05-10 08:29:06.982+00	شريف	01033833119	\N	\N	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-10 08:40:38.90569+00	\N	R	سباكه	sabak	\N	2026-05-10 08:40:38.817	تم الإلغاء بواسطة العميل	\N	\N	\N	f	\N	\N
+aa862967-be83-4970-a97b-22232d0d87ce	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	accepted	60	50	\N	\N	\N	cash_on_delivery	2026-05-10 03:41:38.082+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-10 10:02:48.161634+00	2026-05-10 10:02:48.102+00	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+65d5f8ec-d541-45da-a609-0c354c38a6b7	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	accepted	120	50	\N	\N	\N	cash_on_delivery	2026-05-11 05:47:19.217+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x2 = 120 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	170	\N	\N	\N	2026-05-11 05:55:44.509581+00	2026-05-11 05:55:44.439+00	U	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+70185fd4-87c5-40c2-af0d-4d96b28f42ca	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 08:58:40.635+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 11:35:46.393125+00	2026-05-11 08:59:19.074+00	H	صن شاين	supermarket	2026-05-11 11:35:46.303	\N	\N	\N	\N	2026-05-11 11:35:43.957+00	f	\N	\N
+51878f67-bccd-4b6e-9781-a3e44eb89cd4	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 11:46:49.706+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 11:47:17.325067+00	2026-05-11 11:46:58.663+00	H	صن شاين	supermarket	2026-05-11 11:47:17.222	\N	\N	\N	\N	2026-05-11 11:47:14.765+00	f	\N	\N
+f1147c6c-1518-40eb-ba98-5d9ae9487cc0	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	55	50	\N	\N	\N	cash_on_delivery	2026-05-11 14:28:57.229+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-11 14:29:26.379977+00	2026-05-11 14:29:05.113+00	H	صن شاين	supermarket	2026-05-11 14:29:26.364	\N	\N	\N	\N	2026-05-11 14:29:16.658+00	f	\N	\N
+f10e4d4b-77d4-4d67-a5bf-fd297cc2ec41	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	120	50	\N	\N	\N	cash_on_delivery	2026-05-11 14:16:02.782+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x2 = 120 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	170	\N	\N	\N	2026-05-11 14:49:19.011057+00	2026-05-11 14:26:54.364+00	H	صن شاين	supermarket	2026-05-11 14:49:19.005	\N	\N	\N	\N	2026-05-11 14:49:16.438+00	f	\N	\N
+38f4868f-2a05-4c73-ab23-68a914a0ae9d	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	delivered	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 15:03:01.13+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-11 15:03:56.69602+00	2026-05-11 15:03:39.878+00	H	صن شاين	supermarket	2026-05-11 15:03:56.679	\N	\N	\N	\N	2026-05-11 15:03:53.617+00	f	\N	\N
+df849e37-45d4-4d47-aee3-cdf6116f9bc4	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	complete	25	50	\N	\N	\N	cash_on_delivery	2026-05-11 15:14:31.749+00	شريف	01033833119	صن شاين	01011111111	\N	\N	["مكرونة إسباجيتي x1 = 25 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	75	\N	\N	\N	2026-05-11 15:43:15.805199+00	2026-05-11 15:15:04.736+00	U	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+819be343-17d5-43de-877a-3bfb63f2e6ec	\N	\N	\N	pending	\N	0	\N	\N	\N	\N	2026-05-11 20:04:33.236+00	شريف	01033833119	\N	\N	\N	\N	[]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-11 20:04:33.236+00	\N	H	سباكه	sabak	\N	\N	\N	\N	\N	\N	f	\N	\N
+c50ea5d6-b53c-4892-a93b-a37572012758	42d36a21-903e-4cc8-93d8-d75cfee8a076	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	55	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:12:31.372+00	شريف	0223369908	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-12 06:37:51.820909+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+cca9cc35-5600-47f5-aa04-58b0b5ab9404	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	90	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:07:10.031+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة رومي قديمة x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	140	\N	\N	\N	2026-05-12 06:37:53.011819+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+4d81f579-1818-4577-9244-433ced03f8d3	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	90	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:00:52.969+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة رومي قديمة x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	140	\N	\N	\N	2026-05-12 06:37:54.21748+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+210dce35-0687-4e96-a396-0962cbcabf8e	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	55	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:00:37.567+00	شريف	01033833119	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-12 06:37:55.381274+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+92addac7-b072-4591-b9cd-7978908c94f2	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	55	50	\N	\N	\N	cash_on_delivery	2026-05-11 20:54:09.389+00	شريف	01033833119	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-12 06:37:56.703973+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+33940a8e-808e-4905-a883-c6048463fb5c	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 20:50:49.163+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:58.094273+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+eebc1487-c19f-4b93-a38c-a9c4afb8faac	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 20:31:54.297+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:59.388942+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+89560377-afd6-40c0-8e39-80c6e8c58b11	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 20:23:55.55+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:38:02.937569+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+f93f4ada-33b7-4ccf-b56c-37f0cedb3b99	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 20:18:14.687+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:38:04.235799+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+efa72c13-36b6-4c54-8086-f56a2ac53518	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 20:11:33.749+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:38:05.526295+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+001fb4c6-08b3-4065-9122-e676467725b9	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 20:11:17.294+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:38:06.726355+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+50ca28e8-9341-464c-a775-a76b7a2c9c43	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 20:06:47.888+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:38:07.941713+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+ca0fb9f7-69b3-46fc-84e2-632c82281cd4	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 20:05:03.02+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:38:09.174181+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+1b7102d7-1da3-4953-8e82-e46644af65f6	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 20:04:21.373+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:38:10.373094+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+5c339b1d-4e36-4af3-8a13-8848f3db2570	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 20:02:07.55+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:38:11.589795+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+70aac33e-d281-4a53-80d8-29a1b381966a	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 18:22:36.021+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:38:12.767663+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+c6db09bd-6b6d-4f6f-bb96-a18323a853fb	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 18:20:54.118+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:38:13.946573+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+7a86259d-1c97-4c28-8eef-2efe1cf8cfc6	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 18:14:27.655+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:38:15.164428+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+706d6dd3-4b32-4d1a-8de1-f43a27d715ab	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 18:14:05.675+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:38:16.395335+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+3840a478-956d-46a4-bd25-00feb6936271	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	55	50	\N	\N	\N	cash_on_delivery	2026-05-11 17:43:48.567+00	شريف	01033833119	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-12 06:38:18.164103+00	\N	H	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+971b5e2e-9df6-4393-a834-5a2ee3afa94a	\N	\N	\N	pending	10	0	\N	\N	\N	\N	2026-05-11 21:12:55.874+00	شريف	0223369908	\N	\N	\N	\N	["فينو (كبير) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-11 21:12:55.874+00	\N	G	مخبز	bakery	\N	\N	\N	\N	\N	\N	f	\N	\N
+a679c272-8052-4a09-8005-2fe8ba8bc573	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-12 06:36:27.232+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:31.703414+00	\N	Tstd	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+f2476ef1-abea-467b-8e1d-fbd2f0ae12b9	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 22:21:42.164+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:33.625507+00	\N	Tstd	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+bc98918c-3061-4cbb-8437-46ff88db9443	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:45:01.993+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:35.563609+00	\N	Jvghhb	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+e2daabc9-bf50-4675-a97a-a55f2a71cc01	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:42:39.604+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:37.290069+00	\N	Jvghhb	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+50f04d10-810f-40aa-af54-b34831225ef3	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:40:18.788+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:38.896756+00	\N	Jvghhb	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+cba123ec-a4c5-4799-ad44-800c2233aa75	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:37:52.448+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:40.543312+00	\N	Jvghhb	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+83798df2-a0c8-4d3b-8626-323c923639ff	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	55	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:35:09.503+00	شريف	01033833119	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-12 06:37:41.837224+00	\N	Jvghhb	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+be1c6117-2bc9-4a0e-b224-c9fbf64cbe7a	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:32:59.143+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:43.12755+00	\N	Jvghhb	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+3a1fc4da-2e4f-48ea-b826-186c31e405d6	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:30:11.817+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:44.357531+00	\N	Hhh	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+35783f6f-63ef-4b33-8c9d-e6c0edcd181d	42d36a21-903e-4cc8-93d8-d75cfee8a076	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:25:52.986+00	شريف	0223369908	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:45.63938+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+8eee1d30-d275-48fc-b051-8a57fe422737	42d36a21-903e-4cc8-93d8-d75cfee8a076	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:20:00.079+00	شريف	0223369908	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:46.941248+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+665c3aec-80c4-4623-ace6-cbb59a03bf1c	42d36a21-903e-4cc8-93d8-d75cfee8a076	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:18:40.457+00	شريف	0223369908	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:48.185797+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+2e0676f9-63ac-42d9-8691-766c628e490d	42d36a21-903e-4cc8-93d8-d75cfee8a076	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:15:27.985+00	شريف	0223369908	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:49.368873+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+af506446-1b4e-4285-89b7-5914bd718460	42d36a21-903e-4cc8-93d8-d75cfee8a076	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-11 21:13:07.432+00	شريف	0223369908	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:37:50.657611+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+78b4553d-8008-449d-93db-ceea89681f44	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	140	50	\N	\N	\N	cash_on_delivery	2026-05-12 06:38:56.091+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة رومي قديمة x1 = 90 ج", "مكرونة إسباجيتي x2 = 50 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	190	\N	\N	\N	2026-05-12 06:39:23.381458+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+b0bea164-f98f-4769-9901-9e710ac28bee	94d3fa22-f704-4be2-aacf-a09f7c030f9c	959f739f-5ae3-4811-a1ab-434012ff11e9	\N	pending	50	3596	\N	\N	\N	cash_on_delivery	2026-05-12 06:40:57.97+00	شريف	01033833119	Joe	\N	\N	\N	["محمد عبيد x1 = 50 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	3646	\N	\N	\N	2026-05-12 06:40:57.975+00	\N	Tstd	Joe	home_chef	\N	\N	\N	\N	\N	\N	f	\N	\N
+d1c2ffd9-b2e3-4c77-ba26-4149e0938902	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	55	50	\N	\N	\N	cash_on_delivery	2026-05-12 06:40:01.408+00	شريف	01033833119	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-12 06:47:22.815024+00	\N	Tstd	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+25f608d7-60cf-4f50-bc01-f6da6eaf120a	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-12 06:49:09.82+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:49:16.057063+00	\N	G	صن شاين	supermarket	\N	\N	رفض بواسطة التاجر	\N	\N	\N	f	\N	\N
+5c67201c-c2c3-478e-a9a6-db0a413578b0	\N	ddf6af56-4979-46a5-a977-f01ce6ebaeec	\N	pending	\N	0	\N	\N	\N	\N	2026-05-12 06:40:43.668+00	شريف	01033833119	Thomas Cook Tours	\N	\N	\N	["الدولة: Uh", "نوع التأشيرة: Ff", "رقم جواز السفر: Ff", "تاريخ السفر: 2026-05-13"]	\N	\N	\N	\N	الدولة: Uh\nنوع التأشيرة: Ff\nرقم جواز السفر: Ff\nتاريخ السفر: 2026-05-13		[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-12 06:40:43.668+00	\N		تأشيرات	travel	\N	\N	\N	\N	\N	\N	f	\N	d96ec8f0-02d0-4c00-90b0-a4901c25ae8a
+23e9122e-50b4-4e57-b7e2-3edba3aaafd5	\N	\N	\N	cancelled	10	0	\N	\N	\N	\N	2026-05-12 06:42:13.212+00	شريف	01033833119	\N	\N	\N	\N	["بنطلون (كي فقط) x1 = 10ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	\N	\N	\N	\N	2026-05-12 06:42:50.201253+00	\N	Tstd	مكوجي	dryclean	\N	\N	Gg	\N	\N	\N	f	\N	\N
+ef03d776-d5d7-4cf0-b14f-3f97d4897c60	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	55	50	\N	\N	\N	cash_on_delivery	2026-05-12 06:43:25.272+00	شريف	01033833119	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-12 06:43:47.838675+00	\N	Tstd	صن شاين	supermarket	\N	\N	رفض بواسطة التاجر	\N	\N	\N	f	\N	\N
+6bbd085b-0d43-414d-be3e-1209f38f9c9c	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	55	50	\N	\N	\N	cash_on_delivery	2026-05-12 06:46:53.969+00	شريف	01033833119	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-12 06:47:21.025117+00	\N	Tstd	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+3066c6e0-bc6c-4ec7-a4c8-8737105d9212	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-12 06:47:44.072+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:48:03.920543+00	\N	G	صن شاين	supermarket	\N	\N	رفض بواسطة التاجر	\N	\N	\N	f	\N	\N
+f3fa6129-baa2-4f9c-b8ba-7737769e9b7e	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	60	50	\N	\N	\N	cash_on_delivery	2026-05-12 06:48:44.962+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 06:48:56.339475+00	\N	G	صن شاين	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+be415c45-b835-46d1-9c4c-01b26812278a	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-12 09:42:44.517+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 09:42:56.29793+00	\N	G	صن شاين	supermarket	\N	\N	رفض بواسطة التاجر	\N	\N	\N	f	\N	\N
+62c08eb3-2daf-46d0-b63f-63431d61d4cb	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	55	50	\N	\N	\N	cash_on_delivery	2026-05-12 09:46:25.581+00	شريف	01033833119	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-12 09:46:38.751606+00	\N	G	صن شاين	supermarket	\N	\N	رفض بواسطة التاجر	\N	\N	\N	f	\N	\N
+4b6ae481-5cfe-47a3-a77b-22802d11a4b3	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	60	50	\N	\N	\N	cash_on_delivery	2026-05-12 09:44:51.415+00	شريف	01033833119	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	110	\N	\N	\N	2026-05-12 09:57:51.025918+00	\N	G	صن شاين	supermarket	\N	\N	G	\N	\N	\N	f	\N	\N
+efad6dc8-d820-404f-9185-e6a2ac1723f9	94d3fa22-f704-4be2-aacf-a09f7c030f9c	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	cancelled	55	50	\N	\N	\N	cash_on_delivery	2026-05-12 13:24:17.606+00	شريف	01033833119	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-12 13:24:29.343628+00	\N	G	صن شاين	supermarket	\N	\N	رفض بواسطة التاجر	\N	\N	\N	f	\N	\N
+964d5459-bd28-4114-b447-90ec3f333011	94d3fa22-f704-4be2-aacf-a09f7c030f9c	\N	\N	pending	230	10	\N	\N	\N	cash_on_delivery	2026-05-12 16:14:57.862+00	شريف	01033833119	\N	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x2", "جبنة شيدر مطبوخ x2"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	240	\N	\N	\N	2026-05-12 16:14:57.862+00	\N	Tstd	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+e74eb069-8afc-48cf-985c-f4a05e65fe7f	94d3fa22-f704-4be2-aacf-a09f7c030f9c	14c34717-0a25-4ed8-ad1b-df970d18b4dc	\N	pending	60	10	\N	\N	\N	cash_on_delivery	2026-05-12 16:15:26.297+00	شريف	01033833119	الهواري	\N	\N	\N	["لبن جهينة كامل الدسم 1 لتر x1"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	70	\N	\N	\N	2026-05-12 16:15:26.297+00	\N	Tstd	الخدمة	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+c26f1eba-b522-437e-aa0f-4821c9bdde40	94d3fa22-f704-4be2-aacf-a09f7c030f9c	\N	\N	pending	115	10	\N	\N	\N	cash_on_delivery	2026-05-12 16:18:58.256+00	شريف	01033833119	\N	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1", "جبنة شيدر مطبوخ x1"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	125	\N	\N	\N	2026-05-12 16:18:58.256+00	\N	Tstd	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+2e5b3d09-47ac-49af-9b15-05a544226618	94d3fa22-f704-4be2-aacf-a09f7c030f9c	\N	\N	pending	60	10	\N	\N	\N	cash_on_delivery	2026-05-12 18:47:01.729+00	شريف	01033833119	\N	\N	\N	\N	["جبنة شيدر مطبوخ x1"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	70	\N	\N	\N	2026-05-12 18:47:01.729+00	\N	Tstd	الخدمة	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+58799c82-662c-467d-941d-4e6173f39a65	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	preparing	115	50	\N	\N	\N	cash_on_delivery	2026-05-12 21:40:50.454+00	عميل	01000000000	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج", "لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	165	\N	\N	\N	2026-05-13 07:56:06.224136+00	\N	ا	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+3c0fbd62-d77f-41e2-af44-9abc00c56765	\N	14c34717-0a25-4ed8-ad1b-df970d18b4dc	\N	pending	151	10	\N	\N	\N	cash_on_delivery	2026-05-13 09:52:37.321+00	عميل	01000000000	الهواري	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 61 ج", "جبنة شيدر مطبوخ x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	161	\N	\N	\N	2026-05-13 09:52:37.321+00	\N	H	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+bfeceed8-4527-48ed-9b4a-95051b4039bc	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	pending	115	50	\N	\N	\N	cash_on_delivery	2026-05-13 09:52:38.353+00	عميل	01000000000	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج", "لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	165	\N	\N	\N	2026-05-13 09:52:38.353+00	\N	H	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+c7175d7b-c4ae-45c3-bece-881a10158419	\N	14c34717-0a25-4ed8-ad1b-df970d18b4dc	\N	pending	151	10	\N	\N	\N	cash_on_delivery	2026-05-13 09:53:48.192+00	عميل	01000000000	الهواري	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 61 ج", "جبنة شيدر مطبوخ x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	161	\N	\N	\N	2026-05-13 09:53:48.192+00	\N	H	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+9969207b-e0c1-48b2-8354-3f4752652754	\N	14c34717-0a25-4ed8-ad1b-df970d18b4dc	\N	pending	151	10	\N	\N	\N	cash_on_delivery	2026-05-13 10:05:21.222+00	عميل	01000000000	الهواري	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 61 ج", "جبنة شيدر مطبوخ x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	161	\N	\N	\N	2026-05-13 10:05:21.222+00	\N	Kkk	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+77878b2b-2697-45b6-99c9-651c9809ee16	\N	14c34717-0a25-4ed8-ad1b-df970d18b4dc	\N	complete	151	10	\N	\N	\N	cash_on_delivery	2026-05-12 21:40:48.991+00	عميل	01000000000	الهواري	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 61 ج", "جبنة شيدر مطبوخ x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	161	\N	\N	\N	2026-05-13 07:56:23.974849+00	\N	ا	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+429273be-58e6-43e5-af99-7b0839afd0b4	\N	14c34717-0a25-4ed8-ad1b-df970d18b4dc	\N	complete	151	10	\N	\N	\N	cash_on_delivery	2026-05-13 07:57:44.512+00	عميل	01000000000	الهواري	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 61 ج", "جبنة شيدر مطبوخ x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	161	\N	\N	\N	2026-05-13 07:58:11.042101+00	\N	H	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+272eccd6-87e6-44df-9639-49994b884458	\N	14c34717-0a25-4ed8-ad1b-df970d18b4dc	\N	pending	151	10	\N	\N	\N	cash_on_delivery	2026-05-13 07:59:16.237+00	عميل	01000000000	الهواري	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 61 ج", "جبنة شيدر مطبوخ x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	161	\N	\N	\N	2026-05-13 07:59:16.237+00	\N	HhhH	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+c9f90257-5a4f-46c7-a128-848bc0444203	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	pending	115	50	\N	\N	\N	cash_on_delivery	2026-05-13 10:05:22.622+00	عميل	01000000000	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج", "لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	165	\N	\N	\N	2026-05-13 10:05:22.622+00	\N	Kkk	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+c8009ba9-a673-475e-b961-1ace18c9f216	\N	14c34717-0a25-4ed8-ad1b-df970d18b4dc	\N	pending	151	10	\N	\N	\N	cash_on_delivery	2026-05-13 10:05:40.105+00	عميل	01000000000	الهواري	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 61 ج", "جبنة شيدر مطبوخ x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	161	\N	\N	\N	2026-05-13 10:05:40.105+00	\N	Kk	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+c439ab76-79ef-4f61-994a-1217b7616f05	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	pending	115	50	\N	\N	\N	cash_on_delivery	2026-05-13 10:05:41.147+00	عميل	01000000000	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج", "لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	165	\N	\N	\N	2026-05-13 10:05:41.147+00	\N	Kk	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+8c4780a2-5c87-47e9-b38d-8e976c9d4433	\N	14c34717-0a25-4ed8-ad1b-df970d18b4dc	\N	pending	151	10	\N	\N	\N	cash_on_delivery	2026-05-13 10:20:00.713+00	عميل	01000000000	الهواري	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 61 ج", "جبنة شيدر مطبوخ x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	161	\N	\N	\N	2026-05-13 10:20:00.713+00	\N	Ggg	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+0120f0e9-08e2-4c27-b4bc-bf46e46659de	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	pending	115	50	\N	\N	\N	cash_on_delivery	2026-05-13 10:20:01.722+00	عميل	01000000000	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج", "لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	165	\N	\N	\N	2026-05-13 10:20:01.722+00	\N	Ggg	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+d573da6d-f225-43af-a0da-04f16e3d4927	\N	14c34717-0a25-4ed8-ad1b-df970d18b4dc	\N	pending	151	10	\N	\N	\N	cash_on_delivery	2026-05-13 10:37:47.188+00	عميل	01000000000	الهواري	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 61 ج", "جبنة شيدر مطبوخ x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	161	\N	\N	\N	2026-05-13 10:37:47.188+00	\N	Hh	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+6fc9e236-9082-41fd-ab09-ad2d2ee34fc0	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	pending	115	50	\N	\N	\N	cash_on_delivery	2026-05-13 10:42:36.12+00	عميل	01000000000	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج", "لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	165	\N	\N	\N	2026-05-13 10:42:36.12+00	\N	Uuu	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+501914a3-1f5d-40d3-836c-3c16bf993d46	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	pending	170	50	\N	\N	\N	cash_on_delivery	2026-05-13 10:44:12.296+00	عميل	01000000000	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج", "لبن المراعي كامل الدسم 1 لتر x2 = 110 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	220	\N	\N	\N	2026-05-13 10:44:12.296+00	\N	Iii	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+413f12ed-cf0e-4b37-b9f8-27446a4cd15a	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	pending	55	50	\N	\N	\N	cash_on_delivery	2026-05-13 10:44:42.429+00	عميل	01000000000	صن شاين	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	105	\N	\N	\N	2026-05-13 10:44:42.429+00	\N	H	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+8efd55c8-51d5-44ee-9d97-4c9871dd68d5	\N	14c34717-0a25-4ed8-ad1b-df970d18b4dc	\N	pending	151	10	\N	\N	\N	cash_on_delivery	2026-05-13 11:00:27.646+00	عميل	01000000000	الهواري	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 61 ج", "جبنة شيدر مطبوخ x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	161	\N	\N	\N	2026-05-13 11:00:27.646+00	\N	Hh	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+e9b77c15-8167-4bc3-9dd3-b52ab876cbee	\N	14c34717-0a25-4ed8-ad1b-df970d18b4dc	\N	pending	151	10	\N	\N	\N	cash_on_delivery	2026-05-13 11:01:55.947+00	عميل	01000000000	الهواري	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 61 ج", "جبنة شيدر مطبوخ x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	161	\N	\N	\N	2026-05-13 11:01:55.947+00	\N	Kk	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+57bb9dad-10ca-4efb-8e44-b87e0eaa3503	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	pending	175	50	\N	\N	\N	cash_on_delivery	2026-05-13 11:02:26.542+00	عميل	01000000000	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x2 = 120 ج", "لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	225	\N	\N	\N	2026-05-13 11:02:26.542+00	\N	Oo	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+283d52b7-acb2-406f-95ff-3756727f5c78	\N	14c34717-0a25-4ed8-ad1b-df970d18b4dc	\N	pending	151	10	\N	\N	\N	cash_on_delivery	2026-05-13 11:13:51.756+00	عميل	01000000000	الهواري	\N	\N	\N	["لبن المراعي كامل الدسم 1 لتر x1 = 61 ج", "جبنة شيدر مطبوخ x1 = 90 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	161	\N	\N	\N	2026-05-13 11:13:51.756+00	\N	Hh	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+2258cc27-84c2-4c02-ae3c-2b46398db459	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	pending	115	50	\N	\N	\N	cash_on_delivery	2026-05-13 11:13:53.589+00	عميل	01000000000	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج", "لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	165	\N	\N	\N	2026-05-13 11:13:53.589+00	\N	Hh	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
+fe1e864e-8075-4a25-aec6-c309bdbeb6a8	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	\N	pending	115	50	\N	\N	\N	cash_on_delivery	2026-05-13 11:16:52.915+00	عميل	01000000000	صن شاين	\N	\N	\N	["جبنة شيدر مطبوخ x1 = 60 ج", "لبن المراعي كامل الدسم 1 لتر x1 = 55 ج"]	\N	\N	\N	\N			[]	{}	0	f	\N	\N	\N	\N	165	\N	\N	\N	2026-05-13 11:16:52.915+00	\N	I	سوبر ماركت	supermarket	\N	\N	\N	\N	\N	\N	f	\N	\N
 \.
 
 
@@ -4978,10 +5563,24 @@ fb8ec20e-b7d4-4def-bb25-a6579c9efac7	مخبز المدينة		\N	\N	bakery	f	202
 22d9c566-63ea-4336-b90b-373fb731daf0	مطعم انس		\N	\N	restaurant	f	2026-03-27 04:29:47.967+00	\N	t	\N	\N	\N	\N		2026-03-27 04:29:47.967+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774585778515_Z_IwNCDa3.jpg	10
 3c325912-2982-472f-b46b-6d50b18bb25d	مطعم الشامي		\N	\N	restaurant	f	2026-03-27 04:29:20.116+00	\N	t	\N	\N	\N	\N		2026-03-27 04:29:20.116+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774585746948_SN7UHPGJY.jpg	10
 3e74b027-1470-467f-9914-e863a6483634	صيدلة الدكتور بوني		\N	\N	pharmacy	f	2026-03-23 18:13:11.68+00	\N	t	\N	\N	\N	\N		2026-03-23 18:13:49.883+00	\N	10
-d44d1541-7849-4627-8547-541d2b8917ff	تجربه		\N	\N	test	f	2026-03-26 05:36:42.185+00	\N	t	\N	\N	\N	\N		2026-03-26 05:36:42.185+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774503400204_JRsmQWUs-.jpg	10
 45ac0789-49ef-4a88-ad5c-dd90f1c2908e	سامح النجار		\N	\N	wood	f	2026-03-22 22:39:02.949+00	\N	t	\N	\N	\N	\N		2026-03-23 01:15:52.838+00	\N	10
 728c8bb1-559e-4220-bc98-9225949d6dbf	سوبر ماركت صن شاين		\N	\N	supermarket	f	2026-03-23 18:28:01.518+00	\N	t	\N	\N	\N	\N		2026-04-26 11:40:56.289+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774503718703_Ljlq9UJBQ.jpg	10
-9ab63685-d26d-4945-9e8e-50ea0f1f74a0	سوبر ماركت ابو سعيد		\N	\N	supermarket	f	2026-04-26 12:02:59.581+00	d6d911dd-76c0-4962-bdae-ab54ef74f5a6	t	\N	ابو سعيد سوبر ماركت 	\N	\N		2026-04-28 00:42:29.301+00	\N	10
+\.
+
+
+--
+-- Data for Name: product_categories; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.product_categories (id, service_id, name, image_url, icon, sort_order, is_active, created_at, updated_at) FROM stdin;
+a26a2604-be2d-4a32-bc8e-b7a9060d1c08	supermarket	خضروات وفاكهة	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777839948879_dqEXH76SB.jpg	nutrition	0	t	2026-05-03 19:27:30.528+00	2026-05-03 20:26:01.475+00
+9fba4007-e0d4-4844-9e59-ed44bb3f357d	supermarket	ألبان	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777840046757_0DgryzXCV.jpg	archive	0	t	2026-05-03 19:17:06.401+00	2026-05-03 20:27:31.528+00
+ef5e2a40-d2ed-4ed3-93ed-f425df4aa10d	supermarket	أجبان	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777840187535_ddn6Re3nb.jpg	pizza	0	t	2026-05-03 19:46:00.72+00	2026-05-03 20:29:51.498+00
+93c4c6f1-045b-4882-83f9-6136de6dad11	supermarket	مشروبات	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777840225081_Z0MwJ_E8i.jpg	cafe	0	t	2026-05-03 18:01:07.192+00	2026-05-03 20:30:30.902+00
+f27e5b90-1271-4388-b590-48d1e31e9c46	supermarket	بقوليات	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777994005104_C_VhC6MGh.jpg	sparkles	5	t	2026-05-05 15:13:42.115+00	2026-05-05 15:13:42.115+00
+d01a5c53-917b-43ec-84e2-f41cddee4982	supermarket	معلبات	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777994122090_YbNlb3I65.jpg	cube	0	t	2026-05-05 15:15:24.637+00	2026-05-05 15:15:24.637+00
+fd3a39da-93bc-49f0-99f9-67ae6342566b	home_chef	مشويات	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1778078078772_9dilA4JbL.jpg	cube	0	t	2026-05-06 14:34:43.786+00	2026-05-06 14:34:43.786+00
+ab2ad873-479a-4752-aab0-6bb08502308e	home_chef	أطباق رئيسية	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1778091146280_dveKN6HQ07.jpg	cube	0	t	2026-05-06 18:12:33.868+00	2026-05-06 18:12:33.868+00
 \.
 
 
@@ -4997,11 +5596,10 @@ COPY public.product_variants (id, product_id, name, price, display_order, create
 -- Data for Name: products; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.products (id, name, description, price, image_url, category, service_id, merchant_id, is_available, created_at, status, rejection_reason, merchant_name, is_template, updated_at, rejectionreason, video_url, merchant_type, service_name) FROM stdin;
-6afc2fbe-8135-41d1-b4d9-06125fff27ed	لبن جهينة ١ لتر	كامل الدسم	45		\N	products	\N	t	2026-03-23 18:29:45.67+00	approved	\N		t	2026-03-23 18:36:03.486	\N	\N	\N	\N
-fc028f2b-0209-4def-a14a-d8895e9baae4	لبن جهينة ١ لتر		45	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774291619630_6f04RoFvE.jpg	\N	products	\N	t	2026-03-23 18:47:03.019+00	approved	\N		t	2026-03-23 18:47:34.483	\N	\N	\N	\N
-878f5b19-c4b5-4f21-9a09-68d0e264f702	بسبسي		18	https://ik.imagekit.io/vzuah6tku/zayedid/misc/product_1777337016618_FA5Mq9fpB.jpg	\N	supermarket	d6d911dd-76c0-4962-bdae-ab54ef74f5a6	t	2026-04-28 00:50:20.676+00	approved	\N	ابو سعيد سوبر ماركت 	f	2026-04-28 00:50:50.696	\N	\N	\N	\N
-5b2c96ad-1119-4389-ba59-819a9ad66b33	Hh	Yh	54	https://ik.imagekit.io/vzuah6tku/zayedid/misc/product_1777338142445_h3lsAJpXn.jpg	\N	supermarket	d6d911dd-76c0-4962-bdae-ab54ef74f5a6	t	2026-04-28 01:02:29.782+00	approved	\N	ابو سعيد سوبر ماركت 	f	2026-04-28 01:02:59.094	\N	\N	\N	\N
+COPY public.products (id, name, description, price, image_url, category, service_id, merchant_id, is_available, created_at, status, rejection_reason, merchant_name, is_template, updated_at, rejectionreason, video_url, merchant_type, service_name, category_id) FROM stdin;
+6afc2fbe-8135-41d1-b4d9-06125fff27ed	لبن جهينة ١ لتر	كامل الدسم	45		\N	products	\N	t	2026-03-23 18:29:45.67+00	approved	\N		t	2026-03-23 18:36:03.486	\N	\N	\N	\N	\N
+fc028f2b-0209-4def-a14a-d8895e9baae4	لبن جهينة ١ لتر		45	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774291619630_6f04RoFvE.jpg	\N	products	\N	t	2026-03-23 18:47:03.019+00	approved	\N		t	2026-03-23 18:47:34.483	\N	\N	\N	\N	\N
+b8759136-2092-4193-aa16-c466aa331a75	محمد عبيد	عبيد للبيع عرض غير محدود عبيد مثالي	50	https://ik.imagekit.io/vzuah6tku/zayedid/misc/product_1778354178077_-9-JHgh1U.jpg	\N	home_chef	959f739f-5ae3-4811-a1ab-434012ff11e9	t	2026-05-09 19:17:22.325+00	approved	\N	Joe	f	2026-05-09 19:18:20.364	\N	\N	\N	\N	ab2ad873-479a-4752-aab0-6bb08502308e
 \.
 
 
@@ -5009,28 +5607,50 @@ fc028f2b-0209-4def-a14a-d8895e9baae4	لبن جهينة ١ لتر		45	https://ik.
 -- Data for Name: profiles; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.profiles (id, full_name, phone, password, role, active, place_id, place_name, is_available, location_lat, location_lng, created_at, updated_at, name, service_area, max_delivery_radius, health_cert_url, merchant_type, is_verified, verification_image, verification_status, rejection_reason, business_license_url, profile_completed, terms_accepted, terms_accepted_at, delivery_fee, delivery_time, avatar_url, average_rating, reviews_count, address, portfolio_images, bio, avg_rating, service_category, bio_approved, portfolio_approved, image_url, delivery_radius, specialties, expo_push_token, commercial_register, tax_card, image_approved, admin_level) FROM stdin;
-3cfaff3b-02fa-4954-b94f-2549ff58715e	Sherif	01033833119	1234	customer	t	\N	\N	t	30.049029	31.0179292	2026-04-25 11:55:22.537+00	2026-04-26 22:35:18.719319+00	\N		10	\N	\N	f	\N	\N	\N	\N	t	f	\N	10	30	\N	0	0	جنه ٢	{}	\N	0	products	f	f	https://ik.imagekit.io/vzuah6tku/zayedid/misc/avatar_1777240861137_02l4W8O3Y.jpg	10	{}	\N	\N	\N	t	basic
-caf160d3-6c00-4b01-811f-374cbd071ce4	شريف سعيد	01223369908	1234	customer	t	\N	\N	t	\N	\N	2026-04-27 14:26:44.069+00	2026-04-27 14:26:44.069+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	t	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic
-ba40a3ee-3d29-45fc-bfcb-c05fd9f622bd	تا	010987987987	1234	customer	t	\N	\N	t	\N	\N	2026-04-28 00:29:04.919+00	2026-04-28 00:29:04.919+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	t	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic
-f63f6bb7-b28f-48b2-a969-4403eec07082	كرم	010222222222	1234	merchant	t	\N	\N	t	\N	\N	2026-04-25 20:39:31.858+00	2026-04-25 20:39:31.858+00	\N	\N	10	\N	pharmacy	f	\N	\N	\N	\N	f	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic
-29fd1cb7-20c4-48ee-aa58-7bf77f867c9f	سوبر ماركت صن شاين	01044444444	1234	merchant	t	728c8bb1-559e-4220-bc98-9225949d6dbf	سوبر ماركت صن شاين	t	\N	\N	2026-04-26 01:13:35.77+00	2026-04-26 01:13:35.77+00	\N	\N	10	\N	supermarket	f	\N	\N	\N	\N	f	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic
-31589dd8-d740-41c2-88eb-c593f10cb46b	شارو	01000000000	1234	admin	t	\N	\N	t	\N	\N	2026-04-28 18:41:19.605+00	2026-04-28 20:26:20.271646+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	f	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	super
-ab423d3c-e506-4bdf-8735-66a8d7c09e54	محدود	01111111111	1234	admin	t	\N	\N	t	\N	\N	2026-04-28 20:41:56.73+00	2026-04-28 20:41:56.73+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	f	f	\N	10	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic
-2783b4b5-af7d-45ec-bd8e-44489e453f18	نوح	01011223344	1234	merchant	t	\N	\N	t	\N	\N	2026-04-25 16:42:12.79+00	2026-04-26 13:43:05.954803+00	\N		10	\N	dryclean	f	\N	\N	\N	\N	f	f	\N	35	30	\N	0	0		{}	\N	0	products	f	f	https://ik.imagekit.io/vzuah6tku/zayedid/users/نوح/profile/profile_1777210565310_tihZiYF98.jpg	10	{}	\N	\N	\N	t	basic
-94c662ff-7cbb-4aec-a003-72372e11110f	Norhan said ghazy	01009676888	Notme@2610	customer	t	\N	\N	t	\N	\N	2026-04-29 17:15:29.414+00	2026-04-29 17:15:29.414+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	t	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic
-96ac0694-7034-4df4-b65c-d0f9353c57fe	شيكو	01212345678	1234	customer	t	\N	\N	t	\N	\N	2026-04-29 19:19:16.764+00	2026-04-29 19:19:16.764+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	t	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic
-b0b424bd-9ce9-4d9e-89e2-249f8953c814	شريف سعيد	01011113333	1234	customer	t	\N	\N	t	\N	\N	2026-04-27 14:37:14.841+00	2026-04-27 14:37:14.841+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	t	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic
-178224b5-f644-444f-b7d2-93119e0a5877	سعد	01211223344	1234	merchant	t	\N	\N	t	\N	\N	2026-04-25 16:45:22.41+00	2026-04-25 16:45:22.41+00	\N	\N	10	\N	dryclean	f	\N	\N	\N	\N	f	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic
-d6d911dd-76c0-4962-bdae-ab54ef74f5a6	ابو سعيد سوبر ماركت	01088888888	1234	merchant	t	9ab63685-d26d-4945-9e8e-50ea0f1f74a0	سوبر ماركت ابو سعيد	t	\N	\N	2026-04-28 00:42:28.417+00	2026-04-28 15:59:03.451001+00	\N		10	\N	supermarket	f	\N	\N	\N	\N	f	f	\N	55	30	\N	0	0		{https://ik.imagekit.io/vzuah6tku/zayedid/users/merchant/misc/portfolio_1777391883316_iKWtzTVaI.jpg}	\N	0	products	f	t	https://ik.imagekit.io/vzuah6tku/zayedid/users/ابو_سعيد_سوبر_ماركت/profile/profile_1777391819065_QktPREKRa.jpg	10	{}	\N	\N	\N	t	basic
-03764db8-1f61-42b6-ba26-58253e9b7e78	سامح	01011111111	1234	merchant	t	\N	\N	t	\N	\N	2026-04-25 20:28:26.842+00	2026-04-25 20:28:26.842+00	\N	\N	10	\N	pharmacy	f	\N	\N	\N	\N	f	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic
-fc8dc024-b48e-4e55-9d35-d6499e312e31	Master Admin	0000000000	Admin135792	admin	t	\N	\N	t	\N	\N	2026-04-28 19:46:30.929771+00	2026-04-28 20:26:20.271646+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	f	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	super
-7a388af4-3139-4526-857e-cdc524728615	Youssif ghazi	01557859221	Yoyo_123321	customer	t	\N	\N	t	\N	\N	2026-04-29 16:46:18.994+00	2026-04-29 16:49:29.757803+00	\N	Cairo Governorate	10	\N	\N	f	\N	\N	\N	\N	t	f	\N	10	30	\N	0	0	Cairo Governorate - El-Zaytoun Sharkeya - Toman Bay	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic
-1f75f439-590c-41b0-ac36-f928f6b6f17d	شيف	01055555555	1234	merchant	t	\N		t	\N	\N	2026-04-26 11:20:52.545+00	2026-04-26 12:08:31.825146+00	\N	\N	10	https://ik.imagekit.io/vzuah6tku/zayedid/misc/cert_1777202442701_ppfOin9md.jpg	home_chef	t	\N	\N	\N	\N	f	f	\N	50	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{مصري,مشاوي,صحية}	\N	\N	\N	t	basic
-ca4374fc-0cd7-4ae1-8dd6-1c6595e00889	شارو	01012345678	1234	customer	t	\N	\N	t	\N	\N	2026-04-29 19:18:40.593+00	2026-04-29 19:18:40.593+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	t	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic
-82aa6e8d-8d8b-4d19-9180-1ebe681ff21d	يوسف	01200000000	admin135792	admin	t	\N	\N	t	\N	\N	2026-04-29 19:25:06.758+00	2026-04-29 19:25:06.758+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	f	f	\N	10	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	super
-a9299c06-f278-4555-b488-abf3489c5be0	توصيل	01188888888	1234	merchant	t	\N		t	\N	\N	2026-05-01 09:33:00.289+00	2026-05-01 12:01:55.04215+00	\N		10	\N	delivery	t	\N	\N	\N	\N	f	f	\N	45	30	\N	0	0		{}	توصيل لاي مكان داخل القاهرة	0	products	t	f	https://ik.imagekit.io/vzuah6tku/zayedid/users/توصيل/profile/profile_1777628784817_qNg8US-EH.jpg	10	{}	\N	\N	\N	t	\N
-c12add9e-6d38-44fd-b558-adc3e03918b6	Thomas Cook Tours	01099999999	1234	merchant	t	\N		t	\N	\N	2026-04-30 14:01:04.769+00	2026-04-30 22:20:48.59375+00	\N	\N	10	\N	thomascook	f	\N	\N	\N	\N	f	f	\N	10	30	\N	0	0	\N	{}	\N	0	products	f	f	https://ik.imagekit.io/vzuah6tku/zayedid/users/thomascook/misc/merchant_c12add9e-6d38-44fd-b558-adc3e03918b6_1777559332339_OkZgoFOOy.jpg	10	{}	\N	\N	\N	t	\N
+COPY public.profiles (id, full_name, phone, password, role, active, place_id, place_name, is_available, location_lat, location_lng, created_at, updated_at, name, service_area, max_delivery_radius, health_cert_url, merchant_type, is_verified, verification_image, verification_status, rejection_reason, business_license_url, profile_completed, terms_accepted, terms_accepted_at, delivery_fee, delivery_time, avatar_url, average_rating, reviews_count, address, portfolio_images, bio, avg_rating, service_category, bio_approved, portfolio_approved, image_url, delivery_radius, specialties, expo_push_token, commercial_register, tax_card, image_approved, admin_level, image_url_pending, documents, documents_approved, region_id) FROM stdin;
+af895294-c6d2-408b-9fbb-4f84b04c29b6	مكوجي مهندسين	01299999999	1234	merchant	t	\N		t	\N	\N	2026-05-07 15:23:41.675+00	2026-05-07 17:08:27.168385+00	\N	\N	10	\N	dryclean	t	\N	\N	\N	\N	f	f	\N	30	30	\N	0	0	\N	{}	\N	0	products	f	f		10	{}	\N	\N	\N	t	\N	\N	[]	f	42b30679-30d7-4f82-9cfe-7d39bd75f56c
+c705af4a-5918-4601-90b7-091fb2dbdc18	يوسف شريف	01557859221	Yoyo_123321	customer	t	\N	\N	t	\N	\N	2026-05-07 17:11:02.795+00	2026-05-07 17:11:02.795+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	t	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic	\N	[]	f	0fea41fd-a310-4e0d-a9bb-8fb9d422a70c
+ddf6af56-4979-46a5-a977-f01ce6ebaeec	Thomas Cook Tours	01000000001	1234	merchant	t	\N		t	\N	\N	2026-05-05 08:34:21.635+00	2026-05-07 07:28:20.107397+00	\N		10	\N	travel	t	\N	\N	\N	\N	f	f	\N	0	30	\N	0	0		{}	نص 2	0	products	t	t	https://ik.imagekit.io/vzuah6tku/zayedid/users/thomas_cook_tours/profile/profile_1778014659036_yMNxJaxtH.jpg	10	{}	\N	\N	\N	t	\N	\N	[{"url": "https://ik.imagekit.io/vzuah6tku/zayedid/users/merchant/misc/doc_1778052887240_pE9waGRPU.jpg", "approved": true}, {"url": "https://ik.imagekit.io/vzuah6tku/zayedid/users/merchant/misc/doc_1778054206966_1kXq2bJYp.jpg", "approved": true}]	t	0fea41fd-a310-4e0d-a9bb-8fb9d422a70c
+37ba1613-bec4-4cae-b36f-bfa93c07428c	يوسف ال (owner)	01500000000	015	admin	t	\N	\N	t	\N	\N	2026-05-09 19:11:58.205+00	2026-05-09 19:11:58.205+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	f	f	\N	10	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	super	\N	[]	f	\N
+64d26587-1b01-4bf0-bc95-26ecf284243f	شريف سعيد	01066666666	1234	customer	t	\N	\N	t	\N	\N	2026-05-07 10:37:57.037+00	2026-05-07 12:35:54.575908+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	t	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f		10	{}	\N	\N	\N	t	basic	\N	[]	f	42b30679-30d7-4f82-9cfe-7d39bd75f56c
+cd392e2f-7c36-41e6-b98f-e81ffc3dc013	صن شاين	01011111111	1234	merchant	t	\N		t	\N	\N	2026-05-05 11:00:36.759+00	2026-05-11 17:01:12.339538+00	\N		10	\N	supermarket	t	\N	\N	\N	\N	f	f	\N	50	30	\N	0	5		\N	نص طويل	4.2	products	t	t	https://ik.imagekit.io/vzuah6tku/zayedid/users/صن_شاين/misc/merchant_cd392e2f-7c36-41e6-b98f-e81ffc3dc013_1778001793590_NTF-0X7C8.jpg	10	{}	\N	\N	\N	t	\N	\N	[]	t	0fea41fd-a310-4e0d-a9bb-8fb9d422a70c
+42d36a21-903e-4cc8-93d8-d75cfee8a076	شريف	0223369908	1234	customer	t	\N	\N	t	\N	\N	2026-05-11 21:12:19.98+00	2026-05-11 21:12:19.98+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	t	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic	\N	[]	f	0fea41fd-a310-4e0d-a9bb-8fb9d422a70c
+14c34717-0a25-4ed8-ad1b-df970d18b4dc	الهواري	01022222222	1234	merchant	t	\N		t	\N	\N	2026-05-12 14:01:09.224+00	2026-05-12 14:01:09.224+00	\N	\N	10	\N	supermarket	f	\N	\N	\N	\N	f	f	\N	10	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	\N	\N	[]	f	0fea41fd-a310-4e0d-a9bb-8fb9d422a70c
+00000000-0000-0000-0000-000000000000	Master Admin	0000000000	Admin135792	admin	t	\N	\N	t	\N	\N	2026-05-05 08:32:24.357454+00	2026-05-05 08:32:24.357454+00	\N	\N	10	\N	\N	t	\N	\N	\N	\N	f	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	super	\N	[]	f	\N
+3e2759ed-9945-4f25-b9d3-5e0229ef165b	Mo	0123	0123	customer	t	\N	\N	t	\N	\N	2026-05-09 18:59:54.724+00	2026-05-09 19:01:09.841753+00	\N		10	\N	\N	f	\N	\N	\N	\N	t	f	\N	0	30	\N	0	0		{}		0	products	f	f	\N	10	{}	\N	\N	\N	t	basic	\N	[]	f	0fea41fd-a310-4e0d-a9bb-8fb9d422a70c
+959f739f-5ae3-4811-a1ab-434012ff11e9	Joe	01200000000	1234	merchant	t	\N		t	\N	\N	2026-05-09 19:13:29.885+00	2026-05-10 04:52:35.107618+00	\N	\N	10	\N	home_chef	t	\N	\N	\N	\N	f	f	\N	3596	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	\N	\N	[]	f	0fea41fd-a310-4e0d-a9bb-8fb9d422a70c
+94d3fa22-f704-4be2-aacf-a09f7c030f9c	شريف	01033833119	1234	customer	t	\N	\N	t	\N	\N	2026-05-05 08:54:24.636+00	2026-05-12 06:38:36.72772+00	\N		\N	\N	\N	f	\N	\N	\N	\N	t	f	\N	0	30	\N	0	0		{}		0	products	f	f	\N	10	{}	\N	\N	\N	\N	basic	\N	[]	f	0fea41fd-a310-4e0d-a9bb-8fb9d422a70c
+9de50990-7b78-4486-ac5e-06cbe9126ce8	شريف سعيد	01077777777	1234	customer	t	\N	\N	t	\N	\N	2026-05-07 11:36:02.851+00	2026-05-07 11:36:02.851+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	t	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic	\N	[]	f	42b30679-30d7-4f82-9cfe-7d39bd75f56c
+65bde6b7-bbd5-4343-a41e-6abb0e1aee8e	ادمن١	01000000000	Admin135792	admin	t	\N	\N	t	\N	\N	2026-05-05 08:33:10.803+00	2026-05-08 09:55:02.995843+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	f	f	\N	10	30	\N	0	0	\N	{}	\N	0	products	f	f		10	{}	\N	\N	\N	t	super	\N	[]	f	6db0b80f-a8c1-4efb-9d18-2be53526642f
+a4663b5a-07e9-49cd-b3b1-8af587f75056	نورهان	01009676888	Notme@2610	customer	t	\N	\N	t	\N	\N	2026-05-09 17:15:00.286+00	2026-05-09 17:15:00.286+00	\N	\N	10	\N	\N	f	\N	\N	\N	\N	t	f	\N	0	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	basic	\N	[]	f	0fea41fd-a310-4e0d-a9bb-8fb9d422a70c
+cb273744-cf70-486d-b6e1-8c1c4932b140	مكوجي	01099999999	1234	merchant	t	\N		t	\N	\N	2026-05-07 15:20:21.472+00	2026-05-07 16:01:08.449157+00	\N	\N	10	\N	dryclean	t	\N	\N	\N	\N	f	f	\N	40	30	\N	0	0	\N	{}	\N	0	products	f	f	\N	10	{}	\N	\N	\N	t	\N	\N	[]	f	0fea41fd-a310-4e0d-a9bb-8fb9d422a70c
+\.
+
+
+--
+-- Data for Name: regions; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.regions (id, name, is_active, created_at, updated_at) FROM stdin;
+0fea41fd-a310-4e0d-a9bb-8fb9d422a70c	الشيخ زايد	t	2026-05-07 07:28:20.107397+00	2026-05-07 09:31:29.965+00
+42b30679-30d7-4f82-9cfe-7d39bd75f56c	المهندسين	t	2026-05-07 10:36:33.970634+00	2026-05-07 17:14:02.403+00
+6db0b80f-a8c1-4efb-9d18-2be53526642f	الدقي	t	2026-05-07 17:17:12.138685+00	2026-05-07 17:17:12.138685+00
+1b63390a-4789-4c2b-854e-f059eb096c90	التجمع الخامس	t	2026-05-07 17:14:27.202846+00	2026-05-09 18:56:22.641+00
+6e175f78-42eb-4906-93e8-19200b22525d	اكتوبر	t	2026-05-07 17:15:57.792648+00	2026-05-09 18:56:26.139+00
+96d5bf5c-70ce-4715-8949-7be4aa1a5ee9	الرحاب	t	2026-05-07 17:17:51.647925+00	2026-05-09 18:56:29.024+00
+e8db1e62-8b94-4c0a-b2a4-3954b6f45a9e	الزمالك	t	2026-05-07 17:14:41.679744+00	2026-05-09 18:56:31.719+00
+1b7428ed-5919-41aa-8b71-b70fc7991e7a	السيدة زينب	t	2026-05-07 17:19:04.921219+00	2026-05-09 18:56:34.734+00
+35cf5a48-f256-4b7d-a653-19684fab58e9	الشروق	t	2026-05-07 17:17:57.578747+00	2026-05-09 18:56:37.204+00
+96b031e7-22b9-4991-a023-170165530542	العاصمة الادارية	t	2026-05-07 17:18:15.059245+00	2026-05-09 18:56:40.963+00
+d55386fd-14dd-4527-ac1a-8aa494b23b1f	المعادي	t	2026-05-07 17:14:35.035925+00	2026-05-09 18:56:44.045+00
+be2e2775-511b-40ef-a6f9-bfa81c0dad05	المقطم	t	2026-05-07 17:19:42.944058+00	2026-05-09 18:56:47.092+00
+0ed0e7d6-cd6b-4a78-b152-1622d80af5e4	الهرم	t	2026-05-07 17:19:51.296774+00	2026-05-09 18:56:50.92+00
+0c8a6397-504c-4437-9fed-49ffa1ac43b9	حدائق الاهرام	t	2026-05-07 17:16:11.450249+00	2026-05-09 18:56:54.008+00
+fc55c479-ffb7-4844-8953-befcb5db8be6	شبرا الخيمة	t	2026-05-07 17:18:54.96978+00	2026-05-09 18:56:56.672+00
+8ae2c9f2-f070-4991-b4b9-0150ac0dad84	فيصل	t	2026-05-07 17:19:56.206854+00	2026-05-09 18:56:59.253+00
+cc1c26c0-1582-4679-b8a4-ad2b4ba5c785	مدينتي	t	2026-05-07 17:18:03.12983+00	2026-05-09 18:57:02.971+00
+6697b521-8182-4515-9243-64c071fa7843	مصر الجديدة	t	2026-05-07 17:14:17.168816+00	2026-05-09 18:57:05.491+00
+8a0c827d-0dcf-4b7f-9985-ec1e11cbee95	وسط البلد	t	2026-05-07 17:17:05.92152+00	2026-05-09 18:57:07.573+00
 \.
 
 
@@ -5064,6 +5684,24 @@ COPY public.reviews (id, order_id, customer_id, provider_id, rating, comment, cr
 5	56d20a29-2cd0-4296-932f-8ef4da38c9bd	\N	ee2126c2-d675-441b-bc19-c96196e3db6b	5	\N	2026-04-28 16:04:11.539
 6	e3ecc3e7-87f4-4202-b38c-e83906422740	\N	ee2126c2-d675-441b-bc19-c96196e3db6b	1	\N	2026-04-29 17:19:09.31
 7	c5fa830f-872e-4b42-b11e-4fa9ffffb8ff	\N	ee2126c2-d675-441b-bc19-c96196e3db6b	5	\N	2026-04-29 19:31:04.209
+8	2e33fee9-4e95-449b-b3fb-ee037c230b30	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	5	جيد جدا	2026-05-06 20:56:44.098
+9	3580583b-a96b-4238-bec0-11a185ce8824	\N	42e2ac06-2524-42f2-9215-98ea3b4f3f56	5	حيد	2026-05-06 21:03:35.155
+10	3524d18d-921d-46c5-a5d7-834bd6e6ef11	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	4	خدمه مميزه	2026-05-06 21:25:33.19
+11	e10b3215-5062-4a45-a9ee-da614928482d	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	2	مش حلو	2026-05-06 21:26:18.667
+12	404921fb-7530-494c-8498-a94af7f52f49	\N	42e2ac06-2524-42f2-9215-98ea3b4f3f56	3	جيد	2026-05-06 21:36:36.832
+13	6d2cb703-2c67-4f84-95e9-740ec2816a7c	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	5	\N	2026-05-09 17:19:11.392
+14	aee21ca9-914f-48f6-bd26-13428219a0a3	\N	cd392e2f-7c36-41e6-b98f-e81ffc3dc013	5	\N	2026-05-11 14:17:08.961
+\.
+
+
+--
+-- Data for Name: service_categories; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.service_categories (id, name, icon, sort_order, is_active, created_at, updated_at, image_url) FROM stdin;
+express	Zid Express	flash-outline	1	t	2026-05-05 14:36:41.884267+00	2026-05-05 17:19:01.65+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1778001527604_EtjwRZTIj.jpg
+pro	Zid Pro	star-outline	2	t	2026-05-05 14:36:41.884267+00	2026-05-05 17:19:20.319+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1778001550387_y3pvnG8Ft.jpg
+other	Other	apps-outline	3	t	2026-05-05 14:36:41.884267+00	2026-05-05 17:19:38.651+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1778001572875_6gu608njN.jpg
 \.
 
 
@@ -5071,15 +5709,52 @@ COPY public.reviews (id, order_id, customer_id, provider_id, rating, comment, cr
 -- Data for Name: service_fields; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.service_fields (id, service_id, field_name, field_label, field_type, is_required, sort_order, created_at, updated_at, sub_service_name, config) FROM stdin;
-f404e0b4-d572-4507-8bd4-fab245782515	سياحة داخلية	destination	📍 الوجهة (مثال: الغردقة، الأقصر، الجونة)	text	t	1	2026-05-01 08:59:19.201205+00	2026-05-01 08:59:19.201205+00	سياحة داخلية	{}
-174df8e2-8abc-4554-9ddf-3ca5c3979113	سياحة داخلية	days	📅 عدد الأيام	number	t	2	2026-05-01 08:59:19.201205+00	2026-05-01 08:59:19.201205+00	سياحة داخلية	{}
-f874b526-3ccd-4153-999c-171ff318d49f	سياحة داخلية	persons	👥 عدد الأشخاص	number	t	3	2026-05-01 08:59:19.201205+00	2026-05-01 08:59:19.201205+00	سياحة داخلية	{}
-0d63c876-0d23-45b8-a714-c760af7b070e	سياحة داخلية	notes	📝 ملاحظات إضافية	textarea	f	4	2026-05-01 08:59:19.201205+00	2026-05-01 08:59:19.201205+00	سياحة داخلية	{}
-\N	توصيل سريع	pickup_location	📍 موقع الاستلام	text	t	1	2026-05-01 12:09:52.573296+00	2026-05-01 12:09:52.573296+00	توصيل سريع	{}
-\N	توصيل سريع	delivery_location	🏠 موقع التوصيل	text	t	2	2026-05-01 12:09:52.573296+00	2026-05-01 12:09:52.573296+00	توصيل سريع	{}
-\N	توصيل سريع	parcel_weight	⚖️ وزن الشحنة (كجم)	number	f	3	2026-05-01 12:09:52.573296+00	2026-05-01 12:09:52.573296+00	توصيل سريع	{}
-\N	توصيل سريع	notes	📝 ملاحظات إضافية	textarea	f	4	2026-05-01 12:09:52.573296+00	2026-05-01 12:09:52.573296+00	توصيل سريع	{}
+COPY public.service_fields (id, service_id, field_name, field_label, field_type, is_required, sort_order, created_at, updated_at, sub_service_name, config, sub_service_id, field_options, is_visible, help_text, placeholder) FROM stdin;
+fcec7112-2ab2-4c37-925f-f3087fb79ff7	حجز طيران	departure_airport	مطار المغادرة	text	t	1	2026-05-10 06:02:25.235723+00	2026-05-10 06:02:25.235723+00	حجز طيران	{}	\N	\N	t		
+c0f8c2c0-b835-4db7-aa02-965d830f8896	حجز طيران	arrival_airport	مطار الوصول	text	t	2	2026-05-10 06:02:25.235723+00	2026-05-10 06:02:25.235723+00	حجز طيران	{}	\N	\N	t		
+186154e1-f93a-4243-bead-03ba6f6ddf4a	حجز طيران	departure_date	تاريخ المغادرة	date	t	3	2026-05-10 06:02:25.235723+00	2026-05-10 06:02:25.235723+00	حجز طيران	{}	\N	\N	t		
+ff4a7c3d-421d-48c6-b4c9-3fc8e9253ccc	حجز طيران	return_date	تاريخ العودة	date	f	4	2026-05-10 06:02:25.235723+00	2026-05-10 06:02:25.235723+00	حجز طيران	{}	\N	\N	t		
+5fbeb99d-7bdd-4648-99d8-7a8d081a93fa	حجز طيران	passengers	عدد المسافرين	number	t	5	2026-05-10 06:02:25.235723+00	2026-05-10 06:02:25.235723+00	حجز طيران	{}	\N	\N	t		
+a561e0fd-3af9-49c1-b8ea-82105e4dc03a	حجز طيران	class	درجة السفر	select	t	6	2026-05-10 06:02:25.235723+00	2026-05-10 06:02:25.235723+00	حجز طيران	{}	\N	\N	t		
+22b90fae-a6fc-4634-b132-ed0ad76e023f	حجز طيران	departure_airport	مطار المغادرة	text	t	1	2026-05-10 06:02:25.235723+00	2026-05-10 06:02:25.235723+00	حجز طيران	{}	\N	\N	t		
+3ad4e308-0a8c-45c2-8099-3ee927ca5a7e	حجز طيران	arrival_airport	مطار الوصول	text	t	2	2026-05-10 06:02:25.235723+00	2026-05-10 06:02:25.235723+00	حجز طيران	{}	\N	\N	t		
+0a075c29-ff45-4f62-ae87-5935db54111b	حجز طيران	departure_date	تاريخ المغادرة	date	t	3	2026-05-10 06:02:25.235723+00	2026-05-10 06:02:25.235723+00	حجز طيران	{}	\N	\N	t		
+e5fd8324-917a-4554-b6b0-f1040c7bd469	حجز طيران	return_date	تاريخ العودة	date	f	4	2026-05-10 06:02:25.235723+00	2026-05-10 06:02:25.235723+00	حجز طيران	{}	\N	\N	t		
+8b5b2d19-3b1d-4e96-aaf1-831753415eb0	حجز طيران	passengers	عدد المسافرين	number	t	5	2026-05-10 06:02:25.235723+00	2026-05-10 06:02:25.235723+00	حجز طيران	{}	\N	\N	t		
+55f39203-8bf0-489a-97e8-74c7c8c84b4d	حجز طيران	class	درجة السفر	select	t	6	2026-05-10 06:02:25.235723+00	2026-05-10 06:02:25.235723+00	حجز طيران	{}	\N	\N	t		
+d4501d73-3173-4245-9583-1ce27c77e574	تأشيرات	country	الدولة	text	t	1	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	تأشيرات	{}	d96ec8f0-02d0-4c00-90b0-a4901c25ae8a	{}	t		
+0bb7c240-d69c-4d61-a314-c841c9eef414	تأشيرات	visa_type	نوع التأشيرة	text	t	2	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	تأشيرات	{}	d96ec8f0-02d0-4c00-90b0-a4901c25ae8a	{}	t		
+72ee4f57-893f-4c94-ba5b-0418e6df0d8a	توصيل سريع	عتر	عتر	text	t	0	2026-05-03 17:07:36.694304+00	2026-05-03 17:07:36.694304+00	\N	{}	4f7d3b98-4bb8-4eb4-a43a-fdb7a1c8cd78	{}	t		
+1c5518c8-b807-488f-8bf0-c6c8bb7188af	حجز فنادق	notes	ملاحظات إضافية	textarea	f	6	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	حجز فنادق	{}	80223561-920a-4949-aca4-f649d9687be2	\N	t		
+4268aad4-2ce5-4a06-a819-74a8e2808d55	تأشيرات	passport_number	رقم جواز السفر	text	t	3	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	تأشيرات	{}	d96ec8f0-02d0-4c00-90b0-a4901c25ae8a	\N	t		
+7269f8bb-17a6-40c7-80ab-5ad906b7b562	تأشيرات	travel_date	تاريخ السفر	date	t	4	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	تأشيرات	{}	d96ec8f0-02d0-4c00-90b0-a4901c25ae8a	\N	t		
+d1c337b1-2a84-4906-ab3f-e08c1e9e37e7	ليموزين و رحلات	pickup_location	موقع الاستلام	text	t	1	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	ليموزين و رحلات	{}	27e0fb0c-a72f-437a-9790-c96ef4c9c341	\N	t		
+70efa962-01a1-49ea-89c1-f52ada4d8bf5	ليموزين و رحلات	dropoff_location	موقع التوصيل	text	t	2	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	ليموزين و رحلات	{}	27e0fb0c-a72f-437a-9790-c96ef4c9c341	\N	t		
+578ffe91-bd28-41d2-8968-62373dcccb04	ليموزين و رحلات	date	التاريخ	date	t	3	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	ليموزين و رحلات	{}	27e0fb0c-a72f-437a-9790-c96ef4c9c341	\N	t		
+eaafcc97-f54a-43ef-9033-30f217a5a7b0	ليموزين و رحلات	time	الوقت	text	t	4	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	ليموزين و رحلات	{}	27e0fb0c-a72f-437a-9790-c96ef4c9c341	\N	t		
+9ae182a4-3d26-4fcc-abb3-963aa2508798	ليموزين و رحلات	passengers	عدد الركاب	number	t	5	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	ليموزين و رحلات	{}	27e0fb0c-a72f-437a-9790-c96ef4c9c341	\N	t		
+60415073-77db-4d56-bea5-28c478738af1	ليموزين و رحلات	notes	ملاحظات	textarea	f	6	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	ليموزين و رحلات	{}	27e0fb0c-a72f-437a-9790-c96ef4c9c341	\N	t		
+1c206777-c34c-4b00-838d-dca4f5a2db01	سياحة داخلية	destination	📍 الوجهة	text	t	1	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	سياحة داخلية	{}	4e5c0360-bdbd-4724-bca4-74d9e2540509	\N	t		
+7fb797fd-d168-4fd1-bc6c-7b4857444993	سياحة داخلية	days	📅 عدد الأيام	number	t	2	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	سياحة داخلية	{}	4e5c0360-bdbd-4724-bca4-74d9e2540509	\N	t		
+a3c53f20-1a98-45be-8bb2-3a341e4fb3c0	سياحة داخلية	persons	👥 عدد الأشخاص	number	t	3	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	سياحة داخلية	{}	4e5c0360-bdbd-4724-bca4-74d9e2540509	\N	t		
+3b8f583e-d412-42d7-8e80-8456714003fa	حجز طيران	departure_airport	مطار المغادرة	text	t	1	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	حجز طيران	{}	20956352-1809-4e50-9a04-577781242eae	\N	t		
+3580e854-ec64-4ced-9324-072e5c5758c7	حجز طيران	arrival_airport	مطار الوصول	text	t	2	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	حجز طيران	{}	20956352-1809-4e50-9a04-577781242eae	\N	t		
+d0b0c0b1-76b4-44e3-a400-4ee4abab89a5	حجز طيران	departure_date	تاريخ المغادرة	date	t	3	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	حجز طيران	{}	20956352-1809-4e50-9a04-577781242eae	\N	t		
+c13e95ad-a069-4d9f-a331-d4b910e09643	حجز طيران	return_date	تاريخ العودة	date	f	4	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	حجز طيران	{}	20956352-1809-4e50-9a04-577781242eae	\N	t		
+3be6a7b5-c51f-416b-9f20-e6470f99721e	حجز طيران	passengers	عدد المسافرين	number	t	5	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	حجز طيران	{}	20956352-1809-4e50-9a04-577781242eae	\N	t		
+1d9602e1-6f73-40f9-b368-387d56ea463a	حجز فنادق	destination	الوجهة	text	t	1	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	حجز فنادق	{}	80223561-920a-4949-aca4-f649d9687be2	\N	t		
+237c0fa7-258e-45b9-9507-6b40f1c16970	حجز فنادق	check_in	تاريخ الوصول	date	t	2	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	حجز فنادق	{}	80223561-920a-4949-aca4-f649d9687be2	\N	t		
+109c3fda-5039-4919-8cca-bf8a09fc7f7c	حجز فنادق	check_out	تاريخ المغادرة	date	t	3	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	حجز فنادق	{}	80223561-920a-4949-aca4-f649d9687be2	\N	t		
+c1c1efc0-5612-4b73-8cd9-943e3d129fdc	حجز فنادق	rooms	عدد الغرف	number	t	4	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	حجز فنادق	{}	80223561-920a-4949-aca4-f649d9687be2	\N	t		
+790a0dde-8586-41e8-8122-4d9050198404	حجز فنادق	guests	عدد النزلاء	number	t	5	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	حجز فنادق	{}	80223561-920a-4949-aca4-f649d9687be2	\N	t		
+dc794d64-a786-4085-a41d-d260eea0b9aa	سياحة داخلية	notes	📝 ملاحظات إضافية	textarea	f	4	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	سياحة داخلية	{}	4e5c0360-bdbd-4724-bca4-74d9e2540509	\N	t		
+ed79573d-414c-4bb7-afa7-8d666afa3e70	حجز طيران	class	درجة السفر	select	t	6	2026-05-02 14:20:58.515215+00	2026-05-02 14:20:58.515215+00	حجز طيران	{}	20956352-1809-4e50-9a04-577781242eae	{اقتصادية,"رجال أعمال",أولى}	t	شكرا	اختر درجة السفر
+329f6f85-b0de-4d50-b748-b1f3790f5044	حجز طيران	departure_airport	مطار المغادرة	text	t	1	2026-05-10 06:02:22.41778+00	2026-05-10 06:02:22.41778+00	حجز طيران	{}	\N	\N	t		
+35ee725c-2703-4eb1-9922-c33ad6a86a48	حجز طيران	arrival_airport	مطار الوصول	text	t	2	2026-05-10 06:02:22.41778+00	2026-05-10 06:02:22.41778+00	حجز طيران	{}	\N	\N	t		
+b2d0010b-9f9a-4c57-8dbe-c3f4e42ee6d5	حجز طيران	departure_date	تاريخ المغادرة	date	t	3	2026-05-10 06:02:22.41778+00	2026-05-10 06:02:22.41778+00	حجز طيران	{}	\N	\N	t		
+c2e47363-c3cd-4853-92a2-c75418885179	حجز طيران	return_date	تاريخ العودة	date	f	4	2026-05-10 06:02:22.41778+00	2026-05-10 06:02:22.41778+00	حجز طيران	{}	\N	\N	t		
+37e61f45-0b0a-49d0-a44a-c6a172e8e4aa	حجز طيران	passengers	عدد المسافرين	number	t	5	2026-05-10 06:02:22.41778+00	2026-05-10 06:02:22.41778+00	حجز طيران	{}	\N	\N	t		
+44c7b6d6-7822-493d-b7f7-d8c7ecf8ff36	حجز طيران	class	درجة السفر	select	t	6	2026-05-10 06:02:22.41778+00	2026-05-10 06:02:22.41778+00	حجز طيران	{}	\N	\N	t		
 \.
 
 
@@ -5088,43 +5763,10 @@ f874b526-3ccd-4153-999c-171ff318d49f	سياحة داخلية	persons	👥 عدد
 --
 
 COPY public.service_fields_new (id, sub_service_id, field_name, field_label, field_type, field_options, is_required, placeholder, help_text, sort_order, created_at, updated_at, show_when_field, show_when_value) FROM stdin;
-c26fc151-cc74-4dd9-8005-b31b0e87cb9a	34c34256-1767-4b6f-98a3-827121c6a7e3	departure_airport	مطار المغادرة	text	{}	t	مثال: القاهرة الدولي	\N	2	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-2667aaab-2cb6-4ba2-b76c-d299971be54a	34c34256-1767-4b6f-98a3-827121c6a7e3	travel_date	تاريخ الذهاب	date	{}	t	\N	\N	3	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-18a1612d-06cf-48e4-bc6c-7b7f95ec9b50	34c34256-1767-4b6f-98a3-827121c6a7e3	arrival_airport	مطار الوصول	text	{}	t	مثال: دبي الدولي	\N	4	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-1adc3aff-f210-4434-ab2b-ff6a35b97308	34c34256-1767-4b6f-98a3-827121c6a7e3	return_date	تاريخ العودة	date	{}	t	\N	\N	5	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	trip_type	ذهاب وعودة
 d5ad1546-f5b6-41fe-af02-5be796b2a489	\N	return_date	تاريخ العودة	date	{}	t	\N	\N	10	2026-04-30 18:21:27.699956+00	2026-04-30 18:21:27.699956+00	trip_type	ذهاب وعودة
 4401c75f-3728-4d88-bc77-9afd2343aeaf	\N	multi_city_1	الوجهة الأولى	text	{}	t	\N	\N	11	2026-04-30 18:21:27.699956+00	2026-04-30 18:21:27.699956+00	trip_type	وجهات متعددة
 31d4572a-9003-4547-b6f1-f116fbc3933b	\N	multi_city_2	الوجهة الثانية	text	{}	t	\N	\N	12	2026-04-30 18:21:27.699956+00	2026-04-30 18:21:27.699956+00	trip_type	وجهات متعددة
 ec41df84-cc20-4f44-836f-c4d8bccc4238	\N	multi_city_3	الوجهة الثالثة	text	{}	f	\N	\N	13	2026-04-30 18:21:27.699956+00	2026-04-30 18:21:27.699956+00	trip_type	وجهات متعددة
-4ec4cda0-464a-4b73-8655-826b25b55675	34c34256-1767-4b6f-98a3-827121c6a7e3	trip_type	نوع الرحلة	select	{"ذهاب فقط","ذهاب وعودة","وجهات متعددة"}	t	\N	\N	1	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-afd25e09-a223-4242-94d7-6cd04d76a569	34c34256-1767-4b6f-98a3-827121c6a7e3	adults	البالغين	number	{}	t	\N	\N	5	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-f27d3c40-0992-4ed9-a61d-8bf59c8725ec	34c34256-1767-4b6f-98a3-827121c6a7e3	children	الأطفال (2-12)	number	{}	f	\N	\N	6	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-342344e6-8741-4e4c-b6c7-4854601c3240	34c34256-1767-4b6f-98a3-827121c6a7e3	infants	الرضع (أقل من سنتين)	number	{}	f	\N	\N	7	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-6c32fc9d-b595-43cd-b149-c5ce9efb3b3d	34c34256-1767-4b6f-98a3-827121c6a7e3	class	درجة السفر	select	{اقتصادية,"رجال أعمال",أولى}	t	\N	\N	8	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-0b3681fc-1c34-4e55-9dae-25a16d55ac16	34c34256-1767-4b6f-98a3-827121c6a7e3	city_1	الوجهة الأولى	text	{}	t	من	\N	11	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	trip_type	وجهات متعددة
-59cdfcea-f650-493b-a053-f749437f6b84	34c34256-1767-4b6f-98a3-827121c6a7e3	city_2	الوجهة الثانية	text	{}	t	إلى	\N	12	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	trip_type	وجهات متعددة
-1d9a247d-fd97-4f96-85a0-e38f06f83521	34c34256-1767-4b6f-98a3-827121c6a7e3	city_3	الوجهة الثالثة	text	{}	f	ثم إلى	\N	13	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	trip_type	وجهات متعددة
-fc6b6a42-691c-48c0-a0db-b96acaea3af9	34c34256-1767-4b6f-98a3-827121c6a7e3	city_4	الوجهة الرابعة	text	{}	f	ثم إلى	\N	14	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	trip_type	وجهات متعددة
-68c22fd3-ce40-4f1f-b2bf-2af5d1e902a3	c942e31b-62cd-45d4-a337-2d820e7a2f85	destination	الوجهة (مدينة/فندق)	text	{}	t	مثال: دبي - فندق هيلتون	\N	1	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-41dffd00-43f8-4c59-8dcd-ad8dafe9d116	c942e31b-62cd-45d4-a337-2d820e7a2f85	check_in	تاريخ الوصول	date	{}	t	\N	\N	2	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-80350642-62c1-46de-89ae-9f51ed20ef9e	c942e31b-62cd-45d4-a337-2d820e7a2f85	check_out	تاريخ المغادرة	date	{}	t	\N	\N	3	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-80cfc8d2-537a-4c2a-ac5d-f04c988d234e	c942e31b-62cd-45d4-a337-2d820e7a2f85	rooms	عدد الغرف	number	{}	t	\N	\N	4	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-892e4f1e-43e1-46c8-9c70-4fb8f72af63a	c942e31b-62cd-45d4-a337-2d820e7a2f85	adults	عدد البالغين	number	{}	t	\N	\N	5	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-62346dcb-c6fb-4553-b265-d634c68ca696	c942e31b-62cd-45d4-a337-2d820e7a2f85	board_type	نوع الإقامة	select	{"إقامة فقط","فطور فقط","نصف إقامة","إقامة كاملة","شاملة جميع الوجبات"}	t	\N	\N	6	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-2e0461b5-9894-4f1b-af67-32173a2b8417	c942e31b-62cd-45d4-a337-2d820e7a2f85	special_meals	وجبات خاصة	text	{}	f	أي طلبات غذائية خاصة؟	\N	10	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	board_type	شاملة جميع الوجبات
-7301162f-ae1c-4c23-9db1-6a5d317b708c	ab1624bb-c7ff-480b-8768-300edb0631c7	country	الدولة المطلوبة	text	{}	t	مثال: إيطاليا	\N	1	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-7ef08c69-a086-425b-ad4a-079959212483	ab1624bb-c7ff-480b-8768-300edb0631c7	visa_type	نوع التأشيرة	select	{سياحة,زيارة,عمل,دراسة}	t	\N	\N	2	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-625c8af3-0c15-48a6-996b-4257721f67da	ab1624bb-c7ff-480b-8768-300edb0631c7	travelers	عدد المتقدمين	number	{}	t	\N	\N	3	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-4528dafe-44ba-4579-8647-5fb30077e08b	ab1624bb-c7ff-480b-8768-300edb0631c7	contact_phone	رقم الهاتف للتواصل	text	{}	t	01xxxxxxxxx	\N	4	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-c9fc0474-adf9-4136-a0ba-4293e82aa68f	ab1624bb-c7ff-480b-8768-300edb0631c7	sponsor	جهة الدعوة/الكفيل	text	{}	t	اسم الشركة أو الجامعة	\N	10	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	visa_type	عمل,دراسة
-28850dc7-cda7-4ec7-9c0b-5a2b72f06c3d	ab1624bb-c7ff-480b-8768-300edb0631c7	duration	مدة الإقامة المطلوبة	text	{}	t	مثال: 3 أشهر	\N	11	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	visa_type	عمل,دراسة
-6279f5ab-0721-4468-8060-db01b2601ce3	c191164d-520c-4d71-a0e8-2d6e5f42e880	trip_type	نوع الرحلة	select	{"ذهاب فقط","ذهاب وعودة",ساعات}	t	\N	\N	1	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-bc7ad282-0218-468d-858f-9e7f72d14579	c191164d-520c-4d71-a0e8-2d6e5f42e880	pickup_location	مكان التحرك	text	{}	t	من أين؟	\N	2	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-f181518b-dec7-474e-b7c1-8dccad36cebb	c191164d-520c-4d71-a0e8-2d6e5f42e880	dropoff_location	الوجهة	text	{}	t	إلى أين؟	\N	3	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-b56810bb-4212-4c69-8da6-ee79e8ec3cca	c191164d-520c-4d71-a0e8-2d6e5f42e880	car_type	نوع السيارة	select	{سيدان,فان,H1}	t	\N	\N	4	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-b650a53b-1023-41ae-acff-3c18f0ddb0c3	c191164d-520c-4d71-a0e8-2d6e5f42e880	passengers	عدد الركاب	number	{}	t	\N	\N	5	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	\N	\N
-3ceee87b-ef26-411e-ae68-4c6f50dd1003	c191164d-520c-4d71-a0e8-2d6e5f42e880	hours	عدد الساعات	number	{}	t	\N	\N	10	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	trip_type	ساعات
-8a09f32c-dbc2-431a-807e-fe04e1e4089f	c191164d-520c-4d71-a0e8-2d6e5f42e880	hourly_rate	الأماكن المراد زيارتها	textarea	{}	f	اكتب الأماكن التي تريد زيارتها	\N	11	2026-04-30 18:32:33.003691+00	2026-04-30 18:32:33.003691+00	trip_type	ساعات
 \.
 
 
@@ -5142,20 +5784,42 @@ bc3f8b06-883d-4400-b526-a4ceb31c5657	laundryshop	بنطلون	https://ik.imageki
 
 
 --
+-- Data for Name: service_tracking_steps; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.service_tracking_steps (id, service_id, step_key, label, icon, sort_order, is_active, created_at, updated_at, image_url, attachment_url, description) FROM stdin;
+54c3bcd0-1e53-4041-abc6-eb289b590cfc	travel	ready	جاهز	time-outline	4	t	2026-05-05 09:07:33.503866+00	2026-05-05 09:07:33.503866+00	\N	\N	\N
+85f756b7-8f3d-439c-8e7d-2804547fa9c7	travel	delivered	تم التسليم	time-outline	5	t	2026-05-05 09:07:33.503866+00	2026-05-05 09:07:33.503866+00	\N	\N	\N
+788bb316-e7bb-42af-b2c9-4516b3d18a78	travel	pending	معلق	time-outline	1	t	2026-05-05 09:07:33.503866+00	2026-05-05 14:47:00.013+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777992411932_4DrDcNT85.jpg	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777986973027_J2XYuIYVe.jpg	
+fbc7a7db-0eba-4129-8460-0950e0c96d7b	travel	received	سيتم مراجعة الطلب	time-outline	2	t	2026-05-05 09:07:33.503866+00	2026-05-07 17:02:58.984+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777975036300_HFY5mIE806.jpg		
+ec975553-eb99-4802-9695-f242ee431c87	travel	preparing	ارسال بيانات الحجز	time-outline	3	t	2026-05-05 09:07:33.503866+00	2026-05-07 17:03:16.441+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777992466559_oJsYTTWlW.jpg		
+027aeea1-e4dc-47a4-a3cd-fd19054f5a12	home_chef	preparing	معلق	time-outline	1	t	2026-05-09 18:59:11.027+00	2026-05-09 18:59:11.027+00			
+a744470f-3d71-438a-95ab-bf430fe6aeb6	supermarket	pending	معلق	time-outline	1	t	2026-05-11 14:20:54.645+00	2026-05-11 14:20:54.645+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1778509250882_6pWR7MMWO.jpg		في انتظار قبول التاجر
+44536cc3-ef4a-48c7-8cdd-f0fc814472c7	supermarket	preparing	تم القبول	time-outline	2	t	2026-05-11 14:22:03.986+00	2026-05-11 14:22:03.986+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1778509321089_WUBaZoAGU.jpg		على وشك البدء في تجهيز طلبك
+2b9f0246-03bd-4987-bf50-e396191a3fd2	supermarket	starting	تجهيز الطلب	time-outline	3	t	2026-05-11 14:23:15.041+00	2026-05-11 14:23:34.848+00			سيتم استلام المندوب حالا
+5164aa8f-8af2-4b80-a0a0-8c9f9f562bb7	supermarket	delivery	مندوب	time-outline	4	t	2026-05-11 14:24:23.627+00	2026-05-11 14:24:23.627+00			المندوب سيبدأ في التحرك
+2d91e121-18ac-49d9-a254-fbd4e58d992f	supermarket	onway	طلبك في الطريق	time-outline	5	t	2026-05-11 14:25:01.246+00	2026-05-11 14:25:01.246+00			سيصلك قريبا
+217a0329-921a-4e3e-8076-466535882e9c	supermarket	complete	تم التوصيل	time-outline	6	t	2026-05-11 14:25:52.941+00	2026-05-11 14:25:52.941+00			تذكر التقييمات
+\.
+
+
+--
 -- Data for Name: services; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.services (id, name, type, screen, icon, color, category, is_active, is_visible, has_items, has_pickup, items_collection, sub_services, image_url, "order", merchant_type, merchant_role, response_message, maintenance_text, service_id, created_at, updated_at, tracking_image, has_video, items_type, merchant_id, merchant_name, header_image) FROM stdin;
-home_chef	الشيف المنزلي	items	MerchantsListScreen	apps-outline	#4F46E5	express	t	t	t	f	service_home_chef_items	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774345965079_jW41iH62B.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-03-24 02:47:53.203	2026-04-28 21:43:22.248	\N	f	dishes	4198059f-1629-49fa-98c2-3bfa7daac9c5	الشيف المنزلي	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777412595319_1k3M7yNTu6.jpg
-bakery	مخبز	items_service	ItemsServiceScreen	apps-outline	#F59E0B	other	t	t	t	f	bakery_items	["وسط", "كبير", "صغير", "سمسم"]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777582916591_1gPa84GaW.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-04-24 23:02:12.981	2026-04-30 21:04:30.875	\N	f	products	db1fa5ef-1332-4e5d-91d1-eeb4e082f2bd	\N	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777583061392_c3LAJvZKu.jpg
-pharmacy	صيدلية	regular	ServiceScreen	apps-outline	#14B8A6	express	t	t	f	f	\N	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774289190679_m0Opvnw1E.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-03-23 18:10:07.728	2026-04-30 21:38:58.671	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777483618073_HhQqGrWe6.jpg	f	products	b724e1a9-d344-45db-8b0d-957940f940b5	صيدلية	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777585134505_4PDiYQYfi.jpg
-delivery	توصيل طلبات	full_service	\N	bicycle	#10B981	express	t	t	f	f	\N	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777635342973_JWOOHVwWx.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-05-01 11:01:16.181734	2026-05-01 11:35:48.635	\N	f	products	10920642-b0a0-4ede-871f-eaf40e51ba00	\N	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777635294187_1GHYZZZ4p.jpg
-restaurant	مطاعم	items	MerchantsListScreen	apps-outline	#6B7280	express	t	t	t	f	service_restaurant_items	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1773993918897_hWpbNtWLq.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	restaurant	2026-03-20 08:05:25.969	2026-04-28 21:31:47.735	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774002178662_k5lGGFQ06.jpg	t	dishes	eca37997-c485-42d0-a872-00a1cbe6f4e9	مطاعم	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777411898895_XHuLqpkM9.jpg
-supermarket	سوبر ماركت	items	MerchantsListScreen	apps-outline	#6B7280	express	t	t	t	f	service_supermarket_items	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1773993657658_ZzndZII5H.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	supermarket	2026-03-20 08:03:53.815	2026-04-28 21:34:16.606	\N	f	products	2a839c04-03d8-4079-a1fb-8bd1826c4564	سوبر ماركت	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777412051628_Ui0oYJddl.jpg
-dryclean	مكوجي	items_service	ItemsServiceScreen	apps-outline	#F59E0B	express	t	t	t	t	dryclean_items	["كي فقط", "كي وتنظيف"]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777127780405_QTT86hEq4.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-04-25 14:36:57.65	2026-04-28 21:42:44.986	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777127806479_lizEkvEXn.jpg	f	products	48a8fe9b-9455-45cd-8f41-329f5e7c40c3	\N	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777412556539_OoQCENSje.jpg
-thomascook	سياحة وسفر	full_service	\N	briefcase	#8B5CF6	other	t	t	f	f	\N	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777560251186_5wqvCYGuh.jpg	99	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-04-30 07:31:10.33691	2026-04-30 19:58:53.218	\N	f	products	51abb99d-6447-474c-8c3b-2b3d3a341d37	\N	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777578148450_lDX8QytP1.jpg
-wood	نجاره	regular	ServiceScreen	apps-outline	#6B7280	pro	t	t	f	f	\N	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774219003587_YZnmWPymH.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-03-22 22:37:10.895	2026-04-30 20:54:27.044	\N	f	products	5a0c1f08-4f81-462e-a34f-444c3008d44a	نجاره	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777582461589_0zFOjV_Z7.jpg
-sabak	سباكه	regular	ServiceScreen	apps-outline	#6B7280	pro	t	t	f	f	\N	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774346052573_GXQlT315H.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-03-24 09:54:35.047	2026-04-30 21:01:02.019	\N	f	products	2fbd346b-eb40-492e-b8db-2972d62e6c8f	سباكه	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777582854478_Oh7avjjHei.jpg
+COPY public.services (id, name, type, screen, icon, color, category, is_active, is_visible, has_items, has_pickup, items_collection, sub_services, image_url, "order", merchant_type, merchant_role, response_message, maintenance_text, service_id, created_at, updated_at, tracking_image, has_video, items_type, merchant_id, merchant_name, header_image, full_service_id, tracking_icon_url) FROM stdin;
+sabak	سباكه	regular	ServiceScreen	apps-outline	#6B7280	pro	t	t	f	f	\N	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774346052573_GXQlT315H.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-03-24 09:54:35.047	2026-04-30 21:01:02.019	\N	f	products	2fbd346b-eb40-492e-b8db-2972d62e6c8f	سباكه	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777582854478_Oh7avjjHei.jpg	\N	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1778388932557_HpyBQcpLc.jpg
+bakery	مخبز	items_service	ItemsServiceScreen	apps-outline	#F59E0B	other	t	t	t	f	bakery_items	["وسط", "كبير", "صغير", "سمسم"]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777582916591_1gPa84GaW.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-04-24 23:02:12.981	2026-04-30 21:04:30.875	\N	f	products	db1fa5ef-1332-4e5d-91d1-eeb4e082f2bd	\N	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777583061392_c3LAJvZKu.jpg	\N	\N
+delivery	توصيل طلبات	full_service	\N	bicycle	#10B981	other	t	t	f	f	\N	[]	\N	99	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-05-01 11:01:16.181734	2026-05-06 07:57:24.767	\N	f	products	10920642-b0a0-4ede-871f-eaf40e51ba00	\N	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777635294187_1GHYZZZ4p.jpg	9352bbce-8ae1-46e2-9964-2db4ce667326	\N
+pharmacy	صيدلية	regular	ServiceScreen	apps-outline	#14B8A6	express	t	t	f	f	\N	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774289190679_m0Opvnw1E.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-03-23 18:10:07.728	2026-04-30 21:38:58.671	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777483618073_HhQqGrWe6.jpg	f	products	b724e1a9-d344-45db-8b0d-957940f940b5	صيدلية	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777585134505_4PDiYQYfi.jpg	\N	\N
+restaurant	مطاعم	items	MerchantsListScreen	apps-outline	#6B7280	express	t	t	t	f	service_restaurant_items	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1773993918897_hWpbNtWLq.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	restaurant	2026-03-20 08:05:25.969	2026-04-28 21:31:47.735	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774002178662_k5lGGFQ06.jpg	t	dishes	eca37997-c485-42d0-a872-00a1cbe6f4e9	مطاعم	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777411898895_XHuLqpkM9.jpg	\N	\N
+home_chef	الشيف المنزلي	items	MerchantsListScreen	apps-outline	#4F46E5	express	t	t	t	f	service_home_chef_items	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774345965079_jW41iH62B.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-03-24 02:47:53.203	2026-04-28 21:43:22.248	\N	f	dishes	4198059f-1629-49fa-98c2-3bfa7daac9c5	الشيف المنزلي	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777412595319_1k3M7yNTu6.jpg	\N	\N
+supermarket	سوبر ماركت	items	MerchantsListScreen	apps-outline	#6B7280	express	t	t	t	f	service_supermarket_items	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1773993657658_ZzndZII5H.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	supermarket	2026-03-20 08:03:53.815	2026-04-28 21:34:16.606	\N	f	products	2a839c04-03d8-4079-a1fb-8bd1826c4564	سوبر ماركت	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777412051628_Ui0oYJddl.jpg	\N	\N
+dryclean	مكوجي	items_service	ItemsServiceScreen	apps-outline	#F59E0B	express	t	t	t	t	dryclean_items	["كي فقط", "كي وتنظيف"]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777127780405_QTT86hEq4.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-04-25 14:36:57.65	2026-04-28 21:42:44.986	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777127806479_lizEkvEXn.jpg	f	products	48a8fe9b-9455-45cd-8f41-329f5e7c40c3	\N	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777412556539_OoQCENSje.jpg	\N	\N
+wood	نجاره	regular	ServiceScreen	apps-outline	#6B7280	pro	t	t	f	f	\N	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1774219003587_YZnmWPymH.jpg	0	merchant	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-03-22 22:37:10.895	2026-04-30 20:54:27.044	\N	f	products	5a0c1f08-4f81-462e-a34f-444c3008d44a	نجاره	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777582461589_0zFOjV_Z7.jpg	\N	\N
+travel	سياحة وسفر	full_service	\N	briefcase	#8B5CF6	other	t	t	f	f	\N	[]	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777560251186_5wqvCYGuh.jpg	99	\N	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-05-03 04:27:14.965556	\N	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777977175802_G5DM0lW26.jpg	f	products	d878e694-1036-40ab-8364-469e19d85f65	\N	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777785943367_p99bDJO8n.jpg	\N	\N
+market	بقاله	items	\N	apps-outline	#6B7280	other	t	t	f	f	\N	[]	\N	0	\N	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-05-12 15:45:34.221646	\N	\N	f	products	8d6db20e-ae8d-45b7-a395-6a46e89fe9a8	\N	\N	\N	\N
+test	تجربه م عاديه	regular	\N	apps-outline	#6B7280	other	t	t	f	f	\N	[]	\N	0	\N	merchant	سيتم التواصل معك قريباً	جاري التحديث	\N	2026-05-12 15:46:18.905695	\N	\N	f	products	7e019e77-3d9b-418b-965d-6e80bedc63aa	\N	\N	\N	\N
 \.
 
 
@@ -5182,12 +5846,15 @@ COPY public.shop_settings (id, is_active, maintenance_message, banner_image, ban
 -- Data for Name: sub_services; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.sub_services (id, full_service_id, name, description, icon, sort_order, is_active, created_at, image_url, show_title) FROM stdin;
-049db113-cbf0-4bf5-a5ba-49f7ea996dfd	9352bbce-8ae1-46e2-9964-2db4ce667326	سياحة داخلية	\N	document-text	99	t	2026-05-01 08:59:19.201205+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777626019322_hooa1NwCdb.jpg	t
-34c34256-1767-4b6f-98a3-827121c6a7e3	9352bbce-8ae1-46e2-9964-2db4ce667326	حجز طيران	\N	airplane	1	t	2026-04-30 18:32:33.003691+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777576757342_r_uOP3G-B.jpg	t
-c942e31b-62cd-45d4-a337-2d820e7a2f85	9352bbce-8ae1-46e2-9964-2db4ce667326	حجز فنادق	\N	bed	2	t	2026-04-30 18:32:33.003691+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777576808994_bq_UNFSeV.jpg	t
-ab1624bb-c7ff-480b-8768-300edb0631c7	9352bbce-8ae1-46e2-9964-2db4ce667326	تأشيرات	\N	document-text	3	t	2026-04-30 18:32:33.003691+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777577044587_HnoBE_sGx.jpg	t
-c191164d-520c-4d71-a0e8-2d6e5f42e880	9352bbce-8ae1-46e2-9964-2db4ce667326	ليموزين و رحلات	\N	car	4	t	2026-04-30 18:32:33.003691+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777577117057_gc0QD8q1d.jpg	t
+COPY public.sub_services (id, full_service_id, name, description, icon, sort_order, is_active, created_at, image_url, show_title, tracking_icon_url) FROM stdin;
+20956352-1809-4e50-9a04-577781242eae	9352bbce-8ae1-46e2-9964-2db4ce667326	حجز طيران	\N	airplane	1	t	2026-05-02 14:20:58.515215+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777576757342_r_uOP3G-B.jpg	t	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1778400514269_WvfuAX-4v.jpg
+80223561-920a-4949-aca4-f649d9687be2	9352bbce-8ae1-46e2-9964-2db4ce667326	حجز فنادق	\N	bed	2	t	2026-05-02 14:20:58.515215+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777576808994_bq_UNFSeV.jpg	t	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1778400604289_59QyFUoo9.jpg
+d96ec8f0-02d0-4c00-90b0-a4901c25ae8a	9352bbce-8ae1-46e2-9964-2db4ce667326	تأشيرات	\N	document-text	3	t	2026-05-02 14:20:58.515215+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777577044587_HnoBE_sGx.jpg	t	\N
+a29efc56-52a6-41ea-8c47-c0f91e34cf6f	c7205659-f582-40f1-9bbb-76dcfb40a337	Y	\N	document-text	0	t	2026-05-02 16:09:22.321932+00	\N	t	https://via.placeholder.com/20
+4f7d3b98-4bb8-4eb4-a43a-fdb7a1c8cd78	c7205659-f582-40f1-9bbb-76dcfb40a337	توصيل سريع	\N	document-text	0	t	2026-05-02 16:07:54.470472+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777817922423_ksaK4mOTC.jpg	t	test_url
+2a82d891-58bd-4cb1-9898-23437435ba0f	c7205659-f582-40f1-9bbb-76dcfb40a337	H	\N	document-text	0	t	2026-05-02 16:26:26.292616+00	\N	t	\N
+4e5c0360-bdbd-4724-bca4-74d9e2540509	9352bbce-8ae1-46e2-9964-2db4ce667326	سياحة داخلية	\N	document-text	5	t	2026-05-02 14:20:58.515215+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777626019322_hooa1NwCdb.jpg	t	\N
+27e0fb0c-a72f-437a-9790-c96ef4c9c341	9352bbce-8ae1-46e2-9964-2db4ce667326	ليموزين و رحلات	\N	car	4	t	2026-05-02 14:20:58.515215+00	https://ik.imagekit.io/vzuah6tku/zayedid/services/service_1777577117057_gc0QD8q1d.jpg	t	\N
 \.
 
 
@@ -5195,49 +5862,48 @@ c191164d-520c-4d71-a0e8-2d6e5f42e880	9352bbce-8ae1-46e2-9964-2db4ce667326	ليم
 -- Data for Name: template_products; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.template_products (id, name, description, image_url, category, service_type, is_approved, created_by, created_at, updated_at) FROM stdin;
-9ebabb39-882b-43b6-8143-7a3448eb6340	لبن المراعي كامل الدسم 1 لتر	لبن طازج كامل الدسم	\N	ألبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-e976ea5d-b967-45e9-b4d1-f9bbe0493c24	لبن جهينة كامل الدسم 1 لتر	لبن طازج كامل الدسم	\N	ألبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-4b48cb6c-3cfe-41c1-aead-7b1cda327bd7	لبن دومتي كامل الدسم 1 لتر	لبن طازج كامل الدسم	\N	ألبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-3cf9a8bc-d286-4803-87b4-d149f31e721e	زبادي جهينة بلدي	زبادي بلدي طبيعي	\N	ألبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-ecce5f49-a763-439e-b5d5-9ed796efaa73	زبادي دانون	زبادي دانون بالفواكه	\N	ألبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-dffb938d-3b91-4cb3-bf87-c0f84fb43913	جبنة رومي قديمة	جبنة رومي بلدي	\N	أجبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-77496c02-8a41-4d9d-a3f8-1c698a98d6cf	جبنة شيدر مطبوخ	جبنة شيدر	\N	أجبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-8ecedb6f-2c64-4f66-8049-f9bf0869ae20	جبنة فيتا	جبنة فيتا بيضاء	\N	أجبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-a8658cf2-5f32-4c55-b638-8c5c1bb94dae	جبنة موتزاريلا	جبنة موتزاريلا للبيتزا	\N	أجبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-86c53b48-edbf-41a7-8403-ef28b8c5b143	جبنة مثلثات	جبنة مثلثات كريمي	\N	أجبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-9e7bac47-32bd-4987-a8ee-6d2a9275caff	بيض بلدي (طبق 30 بيضة)	بيض بلدي طازج	\N	بيض	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-21c75f9f-679b-40d3-bb9a-0ad38c3806f1	بيض أحمر (طبق 30 بيضة)	بيض أحمر طازج	\N	بيض	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-d44375e1-f9bc-40c1-b505-67a2b550bec7	خبز شامي	خبز شامي طازج	\N	مخبوزات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-2c5b84cb-ba59-4433-9028-5ef7ed1948ae	خبز توست	خبز توست أبيض	\N	مخبوزات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-70b78876-b6af-49ec-a7be-4f4a4cd36735	عيش فينو	عيش فينو طازج	\N	مخبوزات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-5c73959b-0dce-493d-9ca0-60737d2cb073	أرز بسمتي هندي 1 كجم	أرز بسمتي	\N	بقوليات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-c49ebbc8-3e29-4efc-821f-bd908f8b4549	أرز مصري 1 كجم	أرز مصري	\N	بقوليات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-0da1c6cc-6f6a-4e3a-932d-754448c1a99b	مكرونة إسباجيتي	مكرونة إيطالي	\N	بقوليات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-2f1a1e0f-125a-4b52-a30a-6f8f12db3aa0	فول معلب	فول مدمس	\N	معلبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-0c8dc78a-d2f9-4df4-b2f2-3a6d9ba1c0b7	عدس أصفر	عدس أصفر مجروش	\N	بقوليات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-a96bd0b1-aa71-4c3d-83c3-c4673dc067ce	زيت عباد الشمس 1 لتر	زيت نباتي	\N	زيوت	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-118c4157-c2c6-4a0c-95ce-df50a2242eea	زيت ذرة 1 لتر	زيت ذرة نقي	\N	زيوت	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-16c41330-c607-4c87-8685-54c48ac238df	سمن بلدي	سمن بلدي طبيعي	\N	زيوت	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-aa64325d-d8cf-429d-b872-bf85ab43f150	زيت زيتون بكر	زيت زيتون بكر ممتاز	\N	زيوت	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-ef894ae6-6341-4cc5-a5a4-da936aac335d	سكر أبيض 1 كجم	سكر ناعم	\N	بقالة	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-01b19049-a629-4667-b651-01b03bc6e812	ملح طعام	ملح طعام ناعم	\N	بقالة	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-af1aa9c5-2edd-4ce2-bef5-c5a26b83f5c7	شاي ليبتون	شاي أسود	\N	مشروبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-a0cab54a-68a6-4ede-972a-cf581697de95	قهوة نسكافيه	قهوة سريعة الذوبان	\N	مشروبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-99a227ec-9f2a-41a5-b9d5-385fb468a62f	مياه معدنية نستله 1.5 لتر	مياه معدنية	\N	مشروبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-06b5edae-5d1c-4d3f-b039-4c098822b097	بيبسي كولا	مشروب غازي	\N	مشروبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-9831db67-cc85-49c9-9551-9c6a6cd96eeb	عصير برتقال طبيعي	عصير طازج	\N	مشروبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-c1bb5710-5ad7-4616-bc43-30fe49b244f6	مسحوق غسيل أريال	مسحوق غسيل	\N	منظفات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-ab647ea6-b15c-4d70-ae2e-d9394c424c18	صابون سائل	صابون سائل لليدين	\N	منظفات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-3a776673-f021-4c6d-92ae-bceb007b611b	كلوركس	مبيض ومنظف	\N	منظفات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-7028bd14-f88b-47a1-9328-2cce6d7652c4	تونة معلبة	تونة قطع	\N	معلبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-7c4e5eb1-7d69-425c-b6fc-df6ef8452815	صلصة طماطم	صلصة طماطم طبيعية	\N	معلبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-e36d658f-214e-4cd2-b347-bd6e740d2535	مربى فراولة	مربى طبيعي	\N	معلبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00
-e9051341-455e-4bd1-8b38-01fb49d55732	Hhg		https://ik.imagekit.io/vzuah6tku/zayedid/misc/product_1777316959828_bv11zzpNn.jpg	عام	supermarket	f	ed7eee41-eacc-49db-83e4-144adcf97a66	2026-04-27 19:09:25.370831+00	2026-04-27 19:09:25.370831+00
-5f98108c-ad99-4c2e-ad88-4c8fbc63ea17	Test		https://ik.imagekit.io/vzuah6tku/zayedid/misc/product_1777320933671_Cn3de6Ic-.jpg	عام	supermarket	f	ed7eee41-eacc-49db-83e4-144adcf97a66	2026-04-27 20:15:39.652293+00	2026-04-27 20:15:39.652293+00
-c7c9d5ea-c76b-41e3-b712-cacf108902a7	لبن خالي الدسم جهينة 1 لتر	لبن خالي الدسم	https://ik.imagekit.io/vzuah6tku/zayedid/misc/template_1777337695580_gNvZLHBBG.jpg	ألبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-28 00:54:58.815+00
-b515cbaf-d214-4b85-a424-8c550b3fead2	كريم شعر فاتيكا		https://ik.imagekit.io/vzuah6tku/zayedid/misc/template_1777491950440_FqCQ1jwiD.jpg	عام	supermarket	t	\N	2026-04-29 19:45:41.378+00	2026-04-29 19:45:52.979+00
-1db795f0-dfd7-4517-a761-01ea736a7803	Ahmed	احمد ليست للبيع هو للاستعاره و مدة الاستعاره اسبوع الاسبوع ب ٥ تلاف جنيه مصري	https://ik.imagekit.io/vzuah6tku/zayedid/misc/template_1777491973705__4-wwdHy7.jpg	عام ٢٠١٢ عنده ١٤ سنه	supermarket	t	\N	2026-04-29 19:46:19.651+00	2026-04-29 19:46:19.651+00
+COPY public.template_products (id, name, description, image_url, category, service_type, is_approved, created_by, created_at, updated_at, category_id) FROM stdin;
+e976ea5d-b967-45e9-b4d1-f9bbe0493c24	لبن جهينة كامل الدسم 1 لتر	لبن طازج كامل الدسم	\N	ألبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+4b48cb6c-3cfe-41c1-aead-7b1cda327bd7	لبن دومتي كامل الدسم 1 لتر	لبن طازج كامل الدسم	\N	ألبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+ecce5f49-a763-439e-b5d5-9ed796efaa73	زبادي دانون	زبادي دانون بالفواكه	\N	ألبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+8ecedb6f-2c64-4f66-8049-f9bf0869ae20	جبنة فيتا	جبنة فيتا بيضاء	\N	أجبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+a8658cf2-5f32-4c55-b638-8c5c1bb94dae	جبنة موتزاريلا	جبنة موتزاريلا للبيتزا	\N	أجبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+86c53b48-edbf-41a7-8403-ef28b8c5b143	جبنة مثلثات	جبنة مثلثات كريمي	\N	أجبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+9e7bac47-32bd-4987-a8ee-6d2a9275caff	بيض بلدي (طبق 30 بيضة)	بيض بلدي طازج	\N	بيض	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+21c75f9f-679b-40d3-bb9a-0ad38c3806f1	بيض أحمر (طبق 30 بيضة)	بيض أحمر طازج	\N	بيض	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+d44375e1-f9bc-40c1-b505-67a2b550bec7	خبز شامي	خبز شامي طازج	\N	مخبوزات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+2c5b84cb-ba59-4433-9028-5ef7ed1948ae	خبز توست	خبز توست أبيض	\N	مخبوزات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+70b78876-b6af-49ec-a7be-4f4a4cd36735	عيش فينو	عيش فينو طازج	\N	مخبوزات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+5c73959b-0dce-493d-9ca0-60737d2cb073	أرز بسمتي هندي 1 كجم	أرز بسمتي	\N	بقوليات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+c49ebbc8-3e29-4efc-821f-bd908f8b4549	أرز مصري 1 كجم	أرز مصري	\N	بقوليات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+0da1c6cc-6f6a-4e3a-932d-754448c1a99b	مكرونة إسباجيتي	مكرونة إيطالي	\N	بقوليات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+2f1a1e0f-125a-4b52-a30a-6f8f12db3aa0	فول معلب	فول مدمس	\N	معلبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+0c8dc78a-d2f9-4df4-b2f2-3a6d9ba1c0b7	عدس أصفر	عدس أصفر مجروش	\N	بقوليات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+a96bd0b1-aa71-4c3d-83c3-c4673dc067ce	زيت عباد الشمس 1 لتر	زيت نباتي	\N	زيوت	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+118c4157-c2c6-4a0c-95ce-df50a2242eea	زيت ذرة 1 لتر	زيت ذرة نقي	\N	زيوت	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+16c41330-c607-4c87-8685-54c48ac238df	سمن بلدي	سمن بلدي طبيعي	\N	زيوت	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+aa64325d-d8cf-429d-b872-bf85ab43f150	زيت زيتون بكر	زيت زيتون بكر ممتاز	\N	زيوت	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+ef894ae6-6341-4cc5-a5a4-da936aac335d	سكر أبيض 1 كجم	سكر ناعم	\N	بقالة	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+01b19049-a629-4667-b651-01b03bc6e812	ملح طعام	ملح طعام ناعم	\N	بقالة	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+af1aa9c5-2edd-4ce2-bef5-c5a26b83f5c7	شاي ليبتون	شاي أسود	\N	مشروبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+a0cab54a-68a6-4ede-972a-cf581697de95	قهوة نسكافيه	قهوة سريعة الذوبان	\N	مشروبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+99a227ec-9f2a-41a5-b9d5-385fb468a62f	مياه معدنية نستله 1.5 لتر	مياه معدنية	\N	مشروبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+c1bb5710-5ad7-4616-bc43-30fe49b244f6	مسحوق غسيل أريال	مسحوق غسيل	\N	منظفات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+ab647ea6-b15c-4d70-ae2e-d9394c424c18	صابون سائل	صابون سائل لليدين	\N	منظفات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+3a776673-f021-4c6d-92ae-bceb007b611b	كلوركس	مبيض ومنظف	\N	منظفات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+7028bd14-f88b-47a1-9328-2cce6d7652c4	تونة معلبة	تونة قطع	\N	معلبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+7c4e5eb1-7d69-425c-b6fc-df6ef8452815	صلصة طماطم	صلصة طماطم طبيعية	\N	معلبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+e36d658f-214e-4cd2-b347-bd6e740d2535	مربى فراولة	مربى طبيعي	\N	معلبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-26 12:27:56.074792+00	\N
+e9051341-455e-4bd1-8b38-01fb49d55732	Hhg		https://ik.imagekit.io/vzuah6tku/zayedid/misc/product_1777316959828_bv11zzpNn.jpg	عام	supermarket	f	ed7eee41-eacc-49db-83e4-144adcf97a66	2026-04-27 19:09:25.370831+00	2026-04-27 19:09:25.370831+00	\N
+5f98108c-ad99-4c2e-ad88-4c8fbc63ea17	Test		https://ik.imagekit.io/vzuah6tku/zayedid/misc/product_1777320933671_Cn3de6Ic-.jpg	عام	supermarket	f	ed7eee41-eacc-49db-83e4-144adcf97a66	2026-04-27 20:15:39.652293+00	2026-04-27 20:15:39.652293+00	\N
+c7c9d5ea-c76b-41e3-b712-cacf108902a7	لبن خالي الدسم جهينة 1 لتر	لبن خالي الدسم	https://ik.imagekit.io/vzuah6tku/zayedid/misc/template_1777337695580_gNvZLHBBG.jpg	ألبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-04-28 00:54:58.815+00	\N
+9831db67-cc85-49c9-9551-9c6a6cd96eeb	عصير برتقال طبيعي	عصير طازج		مشروبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-05-03 19:16:05.058+00	93c4c6f1-045b-4882-83f9-6136de6dad11
+06b5edae-5d1c-4d3f-b039-4c098822b097	بيبسي كولا	مشروب غازي		مشروبات	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-05-03 19:16:20.579+00	93c4c6f1-045b-4882-83f9-6136de6dad11
+b515cbaf-d214-4b85-a424-8c550b3fead2	كريم شعر فاتيكا		https://ik.imagekit.io/vzuah6tku/zayedid/misc/template_1777491950440_FqCQ1jwiD.jpg	عام	supermarket	t	\N	2026-04-29 19:45:41.378+00	2026-04-29 19:45:52.979+00	\N
+3cf9a8bc-d286-4803-87b4-d149f31e721e	زبادي جهينة بلدي	زبادي بلدي طبيعي		ألبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-05-03 19:17:20.532+00	9fba4007-e0d4-4844-9e59-ed44bb3f357d
+dffb938d-3b91-4cb3-bf87-c0f84fb43913	جبنة رومي قديمة	جبنة رومي بلدي	https://ik.imagekit.io/vzuah6tku/zayedid/misc/template_1778093074716_UwXFZMM3w.jpg	أجبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-05-06 18:44:38.085+00	\N
+77496c02-8a41-4d9d-a3f8-1c698a98d6cf	جبنة شيدر مطبوخ	جبنة شيدر	https://ik.imagekit.io/vzuah6tku/zayedid/misc/template_1778658524565_wFk9X3ax-.jpg	أجبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-05-13 07:48:48.09+00	\N
+9ebabb39-882b-43b6-8143-7a3448eb6340	لبن المراعي كامل الدسم 1 لتر	لبن طازج كامل الدسم	https://ik.imagekit.io/vzuah6tku/zayedid/misc/template_1778658633346_wBD6q0Pj1.jpg	ألبان	supermarket	t	\N	2026-04-26 12:27:56.074792+00	2026-05-13 07:50:38.067+00	\N
 \.
 
 
@@ -5246,21 +5912,9 @@ b515cbaf-d214-4b85-a424-8c550b3fead2	كريم شعر فاتيكا		https://ik.im
 --
 
 COPY public.user_tokens (id, user_id, expo_push_token, platform, created_at, updated_at) FROM stdin;
-5a7b39f9-4370-4100-92f7-c5da4c1184ee	ae2bf0d7-cd38-4d8b-8196-267f30532c06	ExponentPushToken[pqdiqYN-fLdavudZ2iJKlO]	android	2026-04-25 12:58:27.557076+00	2026-04-25 14:12:44.149+00
-d2f358a5-2fa3-4585-b7a2-61ade8fe6306	66251fdf-5cfd-42a4-a4db-f3cf9aa8d735	ExponentPushToken[pqdiqYN-fLdavudZ2iJKlO]	android	2026-04-25 14:48:42.238927+00	2026-04-25 14:48:42.095+00
-506eaf38-5447-424b-9205-ffbaafc75e4f	1b46fa06-3ee8-48f7-b469-fe9eb26abb63	ExponentPushToken[pqdiqYN-fLdavudZ2iJKlO]	android	2026-04-25 16:28:51.147506+00	2026-04-25 16:29:26.444+00
-852e2689-5057-4b55-93bd-16e01b09057c	74067e16-957f-484f-828f-38c79dd0bc79	ExponentPushToken[pqdiqYN-fLdavudZ2iJKlO]	android	2026-04-25 16:31:22.79719+00	2026-04-25 16:41:15.63+00
-56e39f7c-76c3-4fa1-89ea-feaf0917b3e3	ea083a9a-767f-4ee2-acde-d97b510fe4ca	ExponentPushToken[_qTdlRGxWpn-mt0-WRp8Rs]	android	2026-04-26 00:56:08.593291+00	2026-04-26 00:56:08.487+00
-79a5552d-7526-4ace-b315-5740e312bf89	fc8dc024-b48e-4e55-9d35-d6499e312e31	ExponentPushToken[JVQqh1L4N7UCNTH4G7lEeL]	android	2026-04-28 20:22:23.067109+00	2026-04-28 20:22:22.858+00
-19204366-8e54-41fd-ba0f-76891c40561f	d6d911dd-76c0-4962-bdae-ab54ef74f5a6	ExponentPushToken[a27ykLPjK7vMAarkb8-2fJ]	android	2026-04-30 12:06:13.868648+00	2026-04-30 12:06:16.501+00
-bfa0258e-8fdb-49d4-ad34-587d6ae8fb78	a9f1ac52-8e20-43a7-9202-985bc8127191	ExponentPushToken[YFXz0eL20HAs6TnV4CGfvO]	android	2026-04-25 17:22:24.300059+00	2026-04-25 18:36:34.373+00
-51f7190a-53fb-4013-8799-20337f0b277b	ab423d3c-e506-4bdf-8735-66a8d7c09e54	ExponentPushToken[fK14utNfcaS2GFpUk0QgCV]	android	2026-04-28 21:09:45.619184+00	2026-04-28 21:27:14.422+00
-9054ceec-5bfe-439b-b5a3-3f0dad53989e	3cfaff3b-02fa-4954-b94f-2549ff58715e	ExponentPushToken[u2H0EgK_9AjUaUrg2-GdNq]	android	2026-04-30 22:35:01.488189+00	2026-04-30 22:35:01.353+00
-2ec595d4-7ac1-422c-a86a-5cf0f7607614	c12add9e-6d38-44fd-b558-adc3e03918b6	ExponentPushToken[u2H0EgK_9AjUaUrg2-GdNq]	android	2026-04-30 22:37:19.20105+00	2026-04-30 22:37:19.146+00
-18d67a6f-0072-4819-afec-06890a319ba5	f63f6bb7-b28f-48b2-a969-4403eec07082	ExponentPushToken[xSu_L4ByvBTvTmMrKKPjW8]	android	2026-04-29 17:20:46.870866+00	2026-04-29 17:30:57.839+00
-3c8946b5-643a-4542-9c0a-b1ac008731e9	94c662ff-7cbb-4aec-a003-72372e11110f	ExponentPushToken[8KrsGaFJEM7DCn8Oa9kFP1]	android	2026-04-29 17:34:10.579056+00	2026-04-29 17:34:09.929+00
-8eb472f0-fe29-4b9e-8a14-cabcd0422be9	178224b5-f644-444f-b7d2-93119e0a5877	ExponentPushToken[gBoIsjI44h62yGYePao4cC]	android	2026-04-25 16:46:03.339266+00	2026-04-27 01:32:14.217+00
-df29bff3-813f-4d17-8c89-ad204ce270bc	31589dd8-d740-41c2-88eb-c593f10cb46b	ExponentPushToken[Fbk6ULJugUwOB5SN5XrtqP]	android	2026-05-01 11:24:11.922197+00	2026-05-01 11:24:11.821+00
+c69058b8-b2fb-46c5-8f2d-409b0548c581	14c34717-0a25-4ed8-ad1b-df970d18b4dc	ExponentPushToken[myPC6JHADpdEmauwkibXaf]	android	2026-05-13 07:56:03.293738+00	2026-05-13 07:58:01.748+00
+637dfa6e-17f5-466a-9e52-53362df48091	42d36a21-903e-4cc8-93d8-d75cfee8a076	ExponentPushToken[iHAB_jIOYMWrzaq-0Q3_6G]	android	2026-05-11 21:19:44.509129+00	2026-05-11 21:19:44.407+00
+6d7beaff-868a-4292-bdaa-1300d1d6845b	94d3fa22-f704-4be2-aacf-a09f7c030f9c	ExponentPushToken[sqnDdbFJ84XkMzg2DD7195]	android	2026-05-13 10:19:37.975153+00	2026-05-13 11:16:31.891+00
 \.
 
 
@@ -5483,9 +6137,11 @@ COPY storage.migrations (id, name, hash, executed_at) FROM stdin;
 53	drop-index-lower-name	d0cb18777d9e2a98ebe0bc5cc7a42e57ebe41854	2026-03-17 18:22:31.885632
 54	drop-index-object-level	6289e048b1472da17c31a7eba1ded625a6457e67	2026-03-17 18:22:31.887636
 55	prevent-direct-deletes	262a4798d5e0f2e7c8970232e03ce8be695d5819	2026-03-17 18:22:31.889163
-56	fix-optimized-search-function	cb58526ebc23048049fd5bf2fd148d18b04a2073	2026-03-17 18:22:31.89364
 57	s3-multipart-uploads-metadata	f127886e00d1b374fadbc7c6b31e09336aad5287	2026-04-07 21:10:13.810496
 58	operation-ergonomics	00ca5d483b3fe0d522133d9002ccc5df98365120	2026-04-07 21:10:13.831114
+56	fix-optimized-search-function	b823ed1e418101032fa01374edc9a436e54e3ed4	2026-03-17 18:22:31.89364
+59	drop-unused-functions	38456f13e39691c2bbb4b5151d0d1cdbabd4a8c4	2026-05-11 14:34:59.954896
+60	optimize-existing-functions-again	db35e1c91a9201e59f4fef8d972c2f277d68b157	2026-05-11 14:34:59.965736
 \.
 
 
@@ -5589,7 +6245,7 @@ SELECT pg_catalog.setval('public.restaurants_id_seq', 2, true);
 -- Name: reviews_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.reviews_id_seq', 7, true);
+SELECT pg_catalog.setval('public.reviews_id_seq', 14, true);
 
 
 --
@@ -5864,6 +6520,14 @@ ALTER TABLE ONLY auth.webauthn_credentials
 
 
 --
+-- Name: app_settings app_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.app_settings
+    ADD CONSTRAINT app_settings_pkey PRIMARY KEY (key);
+
+
+--
 -- Name: assistants assistants_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -5936,6 +6600,22 @@ ALTER TABLE ONLY public.merchant_product_prices
 
 
 --
+-- Name: merchant_sub_services merchant_sub_services_merchant_id_sub_service_id_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.merchant_sub_services
+    ADD CONSTRAINT merchant_sub_services_merchant_id_sub_service_id_key UNIQUE (merchant_id, sub_service_id);
+
+
+--
+-- Name: merchant_sub_services merchant_sub_services_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.merchant_sub_services
+    ADD CONSTRAINT merchant_sub_services_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: merchants merchants_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -5984,6 +6664,14 @@ ALTER TABLE ONLY public.places
 
 
 --
+-- Name: product_categories product_categories_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.product_categories
+    ADD CONSTRAINT product_categories_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: product_variants product_variants_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6013,6 +6701,22 @@ ALTER TABLE ONLY public.profiles
 
 ALTER TABLE ONLY public.profiles
     ADD CONSTRAINT profiles_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: regions regions_name_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.regions
+    ADD CONSTRAINT regions_name_key UNIQUE (name);
+
+
+--
+-- Name: regions regions_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.regions
+    ADD CONSTRAINT regions_pkey PRIMARY KEY (id);
 
 
 --
@@ -6048,6 +6752,14 @@ ALTER TABLE ONLY public.reviews
 
 
 --
+-- Name: service_categories service_categories_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.service_categories
+    ADD CONSTRAINT service_categories_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: service_fields_new service_fields_new_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -6061,6 +6773,14 @@ ALTER TABLE ONLY public.service_fields_new
 
 ALTER TABLE ONLY public.service_items
     ADD CONSTRAINT service_items_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: service_tracking_steps service_tracking_steps_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.service_tracking_steps
+    ADD CONSTRAINT service_tracking_steps_pkey PRIMARY KEY (id);
 
 
 --
@@ -6894,6 +7614,48 @@ ALTER INDEX realtime.messages_pkey ATTACH PARTITION realtime.messages_2026_04_16
 
 
 --
+-- Name: service_fields prevent_duplicate_fields; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER prevent_duplicate_fields BEFORE INSERT ON public.service_fields FOR EACH ROW EXECUTE FUNCTION public.check_duplicate_field();
+
+
+--
+-- Name: full_services trigger_auto_create_merchant; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trigger_auto_create_merchant AFTER INSERT ON public.full_services FOR EACH ROW EXECUTE FUNCTION public.auto_create_merchant_for_full_service();
+
+
+--
+-- Name: profiles trigger_auto_create_merchant; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trigger_auto_create_merchant AFTER INSERT OR UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION public.auto_create_merchant_record();
+
+
+--
+-- Name: services trigger_copy_merchant_on_new_service; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trigger_copy_merchant_on_new_service AFTER INSERT ON public.services FOR EACH ROW EXECUTE FUNCTION public.copy_merchant_on_new_service();
+
+
+--
+-- Name: sub_services trigger_copy_service_fields; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trigger_copy_service_fields AFTER INSERT ON public.sub_services FOR EACH ROW EXECUTE FUNCTION public.copy_service_fields_on_new_sub();
+
+
+--
+-- Name: services trigger_copy_sub_services; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trigger_copy_sub_services AFTER INSERT ON public.services FOR EACH ROW EXECUTE FUNCTION public.copy_sub_services_on_new_service();
+
+
+--
 -- Name: orders update_orders_modtime; Type: TRIGGER; Schema: public; Owner: postgres
 --
 
@@ -7103,6 +7865,22 @@ ALTER TABLE ONLY public.merchant_product_prices
 
 
 --
+-- Name: merchant_sub_services merchant_sub_services_merchant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.merchant_sub_services
+    ADD CONSTRAINT merchant_sub_services_merchant_id_fkey FOREIGN KEY (merchant_id) REFERENCES public.profiles(id) ON DELETE CASCADE;
+
+
+--
+-- Name: merchant_sub_services merchant_sub_services_sub_service_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.merchant_sub_services
+    ADD CONSTRAINT merchant_sub_services_sub_service_id_fkey FOREIGN KEY (sub_service_id) REFERENCES public.sub_services(id) ON DELETE CASCADE;
+
+
+--
 -- Name: orders orders_driver_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -7148,6 +7926,14 @@ ALTER TABLE ONLY public.products
 
 ALTER TABLE ONLY public.profiles
     ADD CONSTRAINT profiles_place_id_fkey FOREIGN KEY (place_id) REFERENCES public.places(id) ON DELETE SET NULL;
+
+
+--
+-- Name: profiles profiles_region_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.profiles
+    ADD CONSTRAINT profiles_region_id_fkey FOREIGN KEY (region_id) REFERENCES public.regions(id) ON DELETE SET NULL;
 
 
 --
@@ -8327,6 +9113,60 @@ GRANT ALL ON FUNCTION pgbouncer.get_auth(p_usename text) TO pgbouncer;
 
 
 --
+-- Name: FUNCTION auto_create_merchant_for_full_service(); Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON FUNCTION public.auto_create_merchant_for_full_service() TO anon;
+GRANT ALL ON FUNCTION public.auto_create_merchant_for_full_service() TO authenticated;
+GRANT ALL ON FUNCTION public.auto_create_merchant_for_full_service() TO service_role;
+
+
+--
+-- Name: FUNCTION auto_create_merchant_record(); Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON FUNCTION public.auto_create_merchant_record() TO anon;
+GRANT ALL ON FUNCTION public.auto_create_merchant_record() TO authenticated;
+GRANT ALL ON FUNCTION public.auto_create_merchant_record() TO service_role;
+
+
+--
+-- Name: FUNCTION check_duplicate_field(); Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON FUNCTION public.check_duplicate_field() TO anon;
+GRANT ALL ON FUNCTION public.check_duplicate_field() TO authenticated;
+GRANT ALL ON FUNCTION public.check_duplicate_field() TO service_role;
+
+
+--
+-- Name: FUNCTION copy_merchant_on_new_service(); Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON FUNCTION public.copy_merchant_on_new_service() TO anon;
+GRANT ALL ON FUNCTION public.copy_merchant_on_new_service() TO authenticated;
+GRANT ALL ON FUNCTION public.copy_merchant_on_new_service() TO service_role;
+
+
+--
+-- Name: FUNCTION copy_service_fields_on_new_sub(); Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON FUNCTION public.copy_service_fields_on_new_sub() TO anon;
+GRANT ALL ON FUNCTION public.copy_service_fields_on_new_sub() TO authenticated;
+GRANT ALL ON FUNCTION public.copy_service_fields_on_new_sub() TO service_role;
+
+
+--
+-- Name: FUNCTION copy_sub_services_on_new_service(); Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON FUNCTION public.copy_sub_services_on_new_service() TO anon;
+GRANT ALL ON FUNCTION public.copy_sub_services_on_new_service() TO authenticated;
+GRANT ALL ON FUNCTION public.copy_sub_services_on_new_service() TO service_role;
+
+
+--
 -- Name: FUNCTION delete_place_with_products(place_id_param bigint); Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -8336,12 +9176,39 @@ GRANT ALL ON FUNCTION public.delete_place_with_products(place_id_param bigint) T
 
 
 --
+-- Name: FUNCTION notify_sound_update(); Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON FUNCTION public.notify_sound_update() TO anon;
+GRANT ALL ON FUNCTION public.notify_sound_update() TO authenticated;
+GRANT ALL ON FUNCTION public.notify_sound_update() TO service_role;
+
+
+--
+-- Name: FUNCTION sync_full_service_data(p_service_id text); Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON FUNCTION public.sync_full_service_data(p_service_id text) TO anon;
+GRANT ALL ON FUNCTION public.sync_full_service_data(p_service_id text) TO authenticated;
+GRANT ALL ON FUNCTION public.sync_full_service_data(p_service_id text) TO service_role;
+
+
+--
 -- Name: FUNCTION update_modified_column(); Type: ACL; Schema: public; Owner: postgres
 --
 
 GRANT ALL ON FUNCTION public.update_modified_column() TO anon;
 GRANT ALL ON FUNCTION public.update_modified_column() TO authenticated;
 GRANT ALL ON FUNCTION public.update_modified_column() TO service_role;
+
+
+--
+-- Name: FUNCTION upsert_full_service_with_subs(p_service_id text, p_service_name text, p_icon text, p_color text); Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON FUNCTION public.upsert_full_service_with_subs(p_service_id text, p_service_name text, p_icon text, p_color text) TO anon;
+GRANT ALL ON FUNCTION public.upsert_full_service_with_subs(p_service_id text, p_service_name text, p_icon text, p_color text) TO authenticated;
+GRANT ALL ON FUNCTION public.upsert_full_service_with_subs(p_service_id text, p_service_name text, p_icon text, p_color text) TO service_role;
 
 
 --
@@ -8721,6 +9588,15 @@ GRANT ALL ON TABLE extensions.pg_stat_statements_info TO dashboard_user;
 
 
 --
+-- Name: TABLE app_settings; Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON TABLE public.app_settings TO anon;
+GRANT ALL ON TABLE public.app_settings TO authenticated;
+GRANT ALL ON TABLE public.app_settings TO service_role;
+
+
+--
 -- Name: TABLE assistants; Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -8829,6 +9705,15 @@ GRANT ALL ON TABLE public.merchant_product_prices TO service_role;
 
 
 --
+-- Name: TABLE merchant_sub_services; Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON TABLE public.merchant_sub_services TO anon;
+GRANT ALL ON TABLE public.merchant_sub_services TO authenticated;
+GRANT ALL ON TABLE public.merchant_sub_services TO service_role;
+
+
+--
 -- Name: TABLE merchants; Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -8883,6 +9768,15 @@ GRANT ALL ON TABLE public.places TO service_role;
 
 
 --
+-- Name: TABLE product_categories; Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON TABLE public.product_categories TO anon;
+GRANT ALL ON TABLE public.product_categories TO authenticated;
+GRANT ALL ON TABLE public.product_categories TO service_role;
+
+
+--
 -- Name: TABLE product_variants; Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -8907,6 +9801,15 @@ GRANT ALL ON TABLE public.products TO service_role;
 GRANT ALL ON TABLE public.profiles TO anon;
 GRANT ALL ON TABLE public.profiles TO authenticated;
 GRANT ALL ON TABLE public.profiles TO service_role;
+
+
+--
+-- Name: TABLE regions; Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON TABLE public.regions TO anon;
+GRANT ALL ON TABLE public.regions TO authenticated;
+GRANT ALL ON TABLE public.regions TO service_role;
 
 
 --
@@ -8955,6 +9858,15 @@ GRANT ALL ON SEQUENCE public.reviews_id_seq TO service_role;
 
 
 --
+-- Name: TABLE service_categories; Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON TABLE public.service_categories TO anon;
+GRANT ALL ON TABLE public.service_categories TO authenticated;
+GRANT ALL ON TABLE public.service_categories TO service_role;
+
+
+--
 -- Name: TABLE service_fields; Type: ACL; Schema: public; Owner: postgres
 --
 
@@ -8979,6 +9891,15 @@ GRANT ALL ON TABLE public.service_fields_new TO service_role;
 GRANT ALL ON TABLE public.service_items TO anon;
 GRANT ALL ON TABLE public.service_items TO authenticated;
 GRANT ALL ON TABLE public.service_items TO service_role;
+
+
+--
+-- Name: TABLE service_tracking_steps; Type: ACL; Schema: public; Owner: postgres
+--
+
+GRANT ALL ON TABLE public.service_tracking_steps TO anon;
+GRANT ALL ON TABLE public.service_tracking_steps TO authenticated;
+GRANT ALL ON TABLE public.service_tracking_steps TO service_role;
 
 
 --
@@ -9502,5 +10423,5 @@ ALTER EVENT TRIGGER pgrst_drop_watch OWNER TO supabase_admin;
 -- PostgreSQL database dump complete
 --
 
-\unrestrict cGg6KgfFseUhuJu8BoCs63sC1HQwdtqtVPZIgjOPVdqTI7bE4CUiWdneATJkUwL
+\unrestrict rMfmasJoqsMsUQqWlVUgp1MNyiGijSDE9jNFVaKi4jraJrbxpaQP5jQeHhJTna7
 
